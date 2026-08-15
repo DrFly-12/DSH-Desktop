@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DeepSeek Harness</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #0d1117;
+    color: #c9d1d9;
+    display: flex; align-items: center; justify-content: center;
+    height: 100vh; overflow: hidden;
+    user-select: none; -webkit-user-select: none;
+  }
+  .container { text-align: center; }
+  .logo {
+    width: 64px; height: 64px; margin: 0 auto 24px;
+    background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+    border-radius: 16px; display: flex; align-items: center; justify-content: center;
+    animation: pulse 2s ease-in-out infinite;
+  }
+  .logo svg { width: 36px; height: 36px; fill: white; }
+  @keyframes pulse {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.05); opacity: 0.85; }
+  }
+  h1 { font-size: 18px; font-weight: 600; margin-bottom: 8px; letter-spacing: -0.3px; }
+  .status { font-size: 13px; color: #8b949e; margin-bottom: 24px; }
+  .spinner {
+    width: 28px; height: 28px; margin: 0 auto;
+    border: 3px solid #30363d; border-top-color: #3b82f6;
+    border-radius: 50%; animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .error { color: #f85149; font-size: 13px; margin-top: 16px; display: none; }
+  .retry-hint { color: #8b949e; font-size: 12px; margin-top: 8px; display: none; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="logo">
+    <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+  </div>
+  <h1>DeepSeek Harness</h1>
+  <p class="status" id="status">Starting server…</p>
+  <div class="spinner" id="spinner"></div>
+  <p class="error" id="error"></p>
+  <p class="retry-hint" id="retry-hint"></p>
+</div>
+<script>
+  const TARGET = "http://127.0.0.1:3080";
+  const POLL_MS = 1500;
+  const MAX_ATTEMPTS = 80;   // 120s total
+  let attempts = 0;
+
+  function status(msg) {
+    document.getElementById("status").textContent = msg;
+  }
+
+  function showError(msg, retry) {
+    document.getElementById("spinner").style.display = "none";
+    document.getElementById("error").textContent = msg;
+    document.getElementById("error").style.display = "block";
+    if (retry) {
+      document.getElementById("retry-hint").textContent = retry;
+      document.getElementById("retry-hint").style.display = "block";
+    }
+  }
+
+  async function check() {
+    attempts++;
+    try {
+      const resp = await fetch(TARGET, { mode: "no-cors", cache: "no-store" });
+      // no-cors means opaque response — any response means server is listening
+      status("Server ready — redirecting…");
+      window.location.href = TARGET;
+    } catch (e) {
+      if (attempts >= MAX_ATTEMPTS) {
+        showError(
+          "Server did not start within 2 minutes.",
+          "Please check the terminal or re-launch the application."
+        );
+        return;
+      }
+      if (attempts <= 3) {
+        status("Starting server…");
+      } else if (attempts <= 10) {
+        status("Still loading dependencies…");
+      } else {
+        status("Almost ready… (" + Math.round(attempts * POLL_MS / 1000) + "s)");
+      }
+      setTimeout(check, POLL_MS);
+    }
+  }
+
+  setTimeout(check, 1000);
+</script>
+</body>
+</html>

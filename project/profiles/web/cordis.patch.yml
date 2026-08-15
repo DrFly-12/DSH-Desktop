@@ -1,0 +1,9 @@
+# Your patch layer for this dsh profile, applied after every bundle layer:
+# a top-level YAML array of loader patch entries (id-targeted config
+# overrides, disables, and insert lists; `!!js` expressions allowed).
+
+# printUrl: true keeps the URL banner for manual `npx @deepseek-ai/dsh web` runs.
+# Silent launch is handled by PowerShell -WindowStyle Hidden, not by this config.
+- id: web-runtime
+  config:
+    printUrl: true
