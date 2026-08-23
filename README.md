@@ -40,13 +40,15 @@ DeepSeek Harness（官方 `@deepseek-ai/dsh`）的 **Windows 桌面化一键安�
 
 ### 一条命令安装并启动（推荐）
 
-在 PowerShell 中粘贴并执行下面这一段。它会从 GitHub 下载最新代码到临时目录，启动安装脚本；安装完成并按回车退出后，会自动打开桌面版 DSH：
+在 PowerShell 中执行下面这一条命令。它会从 GitHub 下载最新安装器并启动；安装完成并按回车退出后，会自动打开桌面版 DSH：
 
 ```powershell
-$zip = Join-Path $env:TEMP "DSH-Desktop-$([guid]::NewGuid().ToString('N')).zip"; $dir = Join-Path $env:TEMP "DSH-Desktop-$([guid]::NewGuid().ToString('N'))"; Invoke-WebRequest "https://github.com/DrFly-12/DSH-Desktop/archive/refs/heads/main.zip" -OutFile $zip; Expand-Archive $zip -DestinationPath $dir; $root = Get-ChildItem $dir -Directory | Select-Object -First 1; & powershell.exe -ExecutionPolicy Bypass -File (Join-Path $root.FullName 'setup.ps1'); $shortcut = Join-Path ([Environment]::GetFolderPath('Desktop')) 'DeepSeek Harness.lnk'; if (Test-Path $shortcut) { Start-Process $shortcut }
+irm https://raw.githubusercontent.com/DrFly-12/DSH-Desktop/main/install.ps1 | iex
 ```
 
-命令仍会询问安装路径和工作区路径，这是为了避免把 DSH 配置或项目文件写错位置。安装完成后无需再手动执行 `pnpm dlx`，直接关闭安装窗口即可看到 DSH 启动窗口。
+它等价于官方 CLI 的短命令风格：远程引导脚本只负责下载临时安装包，正式的 `setup.ps1` 仍会询问安装路径和工作区路径。安装完成后无需再手动执行 `pnpm dlx`，直接关闭安装窗口即可看到 DSH 启动窗口。
+
+> 安全提示：执行前可先在浏览器打开 [install.ps1](https://raw.githubusercontent.com/DrFly-12/DSH-Desktop/main/install.ps1) 检查脚本内容；公司安全策略禁止 `irm | iex` 时，请使用下方的 ZIP 下载方式。
 
 ### 1. 获取本仓库
 
@@ -132,6 +134,7 @@ function dshweb {
 ```
 DSH-Desktop/
 ├── setup.ps1                 # 主安装脚本（7 阶段交互式）
+├── install.ps1               # 远程一条命令引导脚本
 ├── README.md
 ├── .gitignore
 └── project/                  # 要落到目标电脑的骨架
