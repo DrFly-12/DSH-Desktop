@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>DeepSeek Harness</title>
+<title>DeepSeek Harness v0.1.1-rc.2</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
@@ -43,8 +43,8 @@
   <div class="logo">
     <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
   </div>
-  <h1>DeepSeek Harness</h1>
-  <p class="status" id="status">Starting server…</p>
+  <h1>DeepSeek Harness <span id="version">v0.1.1-rc.2</span></h1>
+  <p class="status" id="status">Starting server...</p>
   <div class="spinner" id="spinner"></div>
   <p class="error" id="error"></p>
   <p class="retry-hint" id="retry-hint"></p>
@@ -73,8 +73,8 @@
     attempts++;
     try {
       const resp = await fetch(TARGET, { mode: "no-cors", cache: "no-store" });
-      // no-cors means opaque response — any response means server is listening
-      status("Server ready — redirecting…");
+      // Any response means the server is listening.
+      status("Server ready - redirecting...");
       window.location.href = TARGET;
     } catch (e) {
       if (attempts >= MAX_ATTEMPTS) {
@@ -85,11 +85,11 @@
         return;
       }
       if (attempts <= 3) {
-        status("Starting server…");
+        status("Starting server...");
       } else if (attempts <= 10) {
-        status("Still loading dependencies…");
+        status("Still loading dependencies...");
       } else {
-        status("Almost ready… (" + Math.round(attempts * POLL_MS / 1000) + "s)");
+        status("Almost ready... (" + Math.round(attempts * POLL_MS / 1000) + "s)");
       }
       setTimeout(check, POLL_MS);
     }
@@ -97,5 +97,6 @@
 
   setTimeout(check, 1000);
 </script>
+
 </body>
 </html>

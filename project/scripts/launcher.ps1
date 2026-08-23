@@ -1,8 +1,8 @@
-﻿# DeepSeek Harness - PowerShell Launcher
+# DeepSeek Harness - PowerShell Launcher
 # Completely hidden console, opens Chrome immediately with a loading page
 # while the DSH server starts in the background.
 # Architecture: Desktop shortcut → powershell -WindowStyle Hidden → this script
-#   → starts npx (hidden background)
+#   → starts pnpm dlx (hidden background)
 #   → opens Chrome to loading.html immediately
 #   → loading.html auto-redirects to DSH when server is ready
 
@@ -16,14 +16,18 @@ $dshHome = if ($env:DSH_HOME) { $env:DSH_HOME } else { "$env:USERPROFILE\.dsh" }
 $lockFile = "$dshHome\scripts\app.pid"
 $logFile = "$dshHome\scripts\dsh-launch.log"
 $loadingPath = "$dshHome\scripts\loading.html"
+$desktopPatchPath = "$dshHome\scripts\desktop.patch.yml"
+$errorPagePath = "$dshHome\scripts\launch-error.html"
+$processOutputPath = "$dshHome\scripts\dsh-process-output.log"
+$processErrorPath = "$dshHome\scripts\dsh-process-error.log"
 $url = "http://127.0.0.1:3080"
 
-# Workspace directory where npx runs (your project root).
+# Workspace directory where pnpm runs (your project root).
 # Priority: workdir.txt > hardcoded default below.
 # To change, either edit the line below or create "workdir.txt" next to this script
 # containing just the path, e.g. "D:\WorkSpace\my-project"
 $workDirCfg = "$dshHome\scripts\workdir.txt"
-$workDir = "D:\WorkSpace\dsh"                         # default — overridden by workdir.txt if present
+$workDir = $env:USERPROFILE                             # default — overridden by workdir.txt if present
 if (Test-Path $workDirCfg) {
     $txt = (Get-Content $workDirCfg -ErrorAction SilentlyContinue | Select-Object -First 1).Trim()
     if ($txt -and (Test-Path $txt)) {
@@ -43,6 +47,7 @@ $chromePaths = @(
 $maxLogBytes = 1MB
 $maxLogLines = 500
 $startupTimeout = 120       # max seconds for server to become ready
+$upgradeTimeout = 30        # max seconds after a package-install prompt appears
 
 # ---- Helper functions ----
 
@@ -95,6 +100,16 @@ function Stop-ProcessTree($rootPid) {
     Log "  Stopped process tree rooted at PID $rootPid"
 }
 
+function Test-TrackedProcess($process) {
+    if (-not $process) { return $false }
+    try {
+        $path = (Get-CimInstance Win32_Process -Filter "ProcessId = $($process.Id)" -ErrorAction Stop).ExecutablePath
+        return $path -and ($path -ieq (Get-Process -Id $process.Id).Path)
+    } catch {
+        return $false
+    }
+}
+
 function Get-ServerPid {
     try {
         $conn = Get-NetTCPConnection -LocalPort 3080 -State Listen -ErrorAction SilentlyContinue |
@@ -137,12 +152,41 @@ function Wait-ForProcessExit($proc, $label) {
     Log "$label closed (exit code: $($proc.ExitCode))"
 }
 
+function Get-RecentFileText($path) {
+    if (-not (Test-Path $path)) { return "" }
+    try {
+        return ((Get-Content $path -Tail 12 -Encoding UTF8 -ErrorAction SilentlyContinue) -join "`n")
+    } catch {
+        return ""
+    }
+}
+
+function Show-LaunchError($message) {
+    $details = Get-RecentFileText $processErrorPath
+    if (-not $details) { $details = Get-RecentFileText $processOutputPath }
+    if ($details) { $message = "$message`n`n$details" }
+    Log "ERROR: $message"
+
+    try {
+        Set-Content -Path $errorPagePath -Value $message -Encoding UTF8
+    } catch {
+        Log "ERROR: Failed to write launch error page: $_"
+    }
+
+    if ($chromeProc -and -not $chromeProc.HasExited) {
+        Stop-Process -Id $chromeProc.Id -Force -ErrorAction SilentlyContinue
+    }
+    $errorUrl = "file:///" + ($errorPagePath -replace '\\', '/')
+    $chromeProc = Launch-Chrome -ChromePath $chrome -AppUrl $errorUrl
+}
+
 # ============================================================
 # MAIN  (wrapped in try/catch so unexpected errors are logged)
 # ============================================================
 
-$cmdProc = $null   # the cmd.exe that spawned npx
+$cmdProc = $null   # the cmd.exe that spawned pnpm
 $chromeProc = $null
+$ownsServer = $false
 
 try {
     Rotate-Log
@@ -153,7 +197,7 @@ try {
         $oldPid = Get-Content $lockFile -ErrorAction SilentlyContinue
         if ($oldPid -match '^\d+$') {
             $oldProc = Get-Process -Id $oldPid -ErrorAction SilentlyContinue
-            if ($oldProc) {
+            if ($oldProc -and (Test-TrackedProcess $oldProc)) {
                 Log "Already running (PID $oldPid; $($oldProc.ProcessName)) — exiting"
                 Add-Type -Name "DSH_WindowHelper2" -MemberDefinition @'
 [DllImport("user32.dll")]
@@ -175,7 +219,7 @@ public static extern bool SetForegroundWindow(IntPtr hWnd);
                 exit 0
             }
         }
-        Log "Stale lock file (PID $oldPid no longer running) — clearing"
+        Log "Stale lock file (PID $oldPid is no longer the tracked launcher) — clearing"
     }
     $pid | Set-Content $lockFile -ErrorAction SilentlyContinue
 
@@ -190,13 +234,27 @@ public static extern bool SetForegroundWindow(IntPtr hWnd);
     }
     Log "  node : $nodePath"
 
-    $npxPath = (Get-Command npx -ErrorAction SilentlyContinue).Source
-    if (-not $npxPath) {
-        Log "ERROR: npx not found (should be bundled with Node.js)"
+    $pnpmPath = (Get-Command pnpm -ErrorAction SilentlyContinue).Source
+    if (-not $pnpmPath) {
+        Log "ERROR: pnpm not found. Install pnpm with Corepack or npm."
         Remove-Item $lockFile -ErrorAction SilentlyContinue
         exit 1
     }
-    Log "  npx  : $npxPath"
+    Log "  pnpm : $pnpmPath"
+
+    $dshVersion = (& pnpm.cmd dlx @deepseek-ai/dsh --version 2>&1 | Select-Object -First 1).ToString().Trim()
+    if ($dshVersion -match '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
+        Log "  dsh  : v$dshVersion"
+        if (Test-Path $loadingPath) {
+            $loadingHtml = Get-Content $loadingPath -Raw -ErrorAction SilentlyContinue
+            if ($loadingHtml) {
+                $loadingHtml = $loadingHtml -replace 'v(?:__DSH_VERSION__|\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)', "v$dshVersion"
+                Set-Content -Path $loadingPath -Value $loadingHtml -Encoding UTF8
+            }
+        }
+    } else {
+        Log "  WARNING: Could not determine DSH version"
+    }
 
     $chrome = Find-Chrome
     if (-not $chrome) {
@@ -228,17 +286,30 @@ public static extern bool SetForegroundWindow(IntPtr hWnd);
         Wait-ForProcessExit $chromeProc "Chrome"
     }
     # ================================================================
-    # PATH B: Cold start → npx in background + Chrome with loading page
+    # PATH B: Cold start → pnpm in background + Chrome with loading page
     # ================================================================
     else {
-        # --- Start npx in background ---
-        Log "Step 2: Starting npx @deepseek-ai/dsh web (hidden)"
+        # --- Start pnpm in background ---
+        $ownsServer = $true
+        Remove-Item $processOutputPath, $processErrorPath, $errorPagePath -Force -ErrorAction SilentlyContinue
+        Log "Step 2: Starting pnpm dlx @deepseek-ai/dsh --profile web --patch desktop.patch.yml (hidden)"
         $psi = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName = "cmd.exe"
-        $psi.Arguments = "/c npx -y @deepseek-ai/dsh web"
+        # Keep the child attached to this launcher so stdout/stderr can be logged
+        # and a stalled upgrade can be shown in the app instead of hanging hidden.
+        if (-not (Test-Path $desktopPatchPath)) {
+            Log "ERROR: Desktop patch not found at $desktopPatchPath"
+            Remove-Item $lockFile -ErrorAction SilentlyContinue
+            exit 1
+        }
+        $psi.Arguments = '/d /s /c "(echo y)|pnpm.cmd dlx @deepseek-ai/dsh --profile web --patch "' + $desktopPatchPath + '" 1>"' + $processOutputPath + '" 2>"' + $processErrorPath + '""'
         $psi.WorkingDirectory = $workDir
         $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
-        $psi.UseShellExecute = $true
+        $psi.UseShellExecute = $false
+        $psi.CreateNoWindow = $true
+        $psi.RedirectStandardInput = $false
+        $psi.RedirectStandardOutput = $false
+        $psi.RedirectStandardError = $false
         $cmdProc = [System.Diagnostics.Process]::Start($psi)
         Log "  cmd.exe PID = $($cmdProc.Id)"
 
@@ -255,6 +326,9 @@ public static extern bool SetForegroundWindow(IntPtr hWnd);
         # --- Poll for server in background while Chrome is open ---
         Log "Step 4: Waiting for server (background, up to ${startupTimeout}s)..."
         $serverReady = $false
+        $launchFailed = $false
+        $upgradePromptAt = $null
+        $lastOutputAt = Get-Date
         $maxAttempts = [math]::Ceiling($startupTimeout / 2)
         for ($i = 1; $i -le $maxAttempts; $i++) {
             # If Chrome was closed early, stop polling
@@ -263,6 +337,36 @@ public static extern bool SetForegroundWindow(IntPtr hWnd);
                 break
             }
             Start-Sleep -Seconds 2
+            if ((Test-Path $processOutputPath) -or (Test-Path $processErrorPath)) {
+                $lastOutputAt = Get-ChildItem $processOutputPath, $processErrorPath -ErrorAction SilentlyContinue |
+                    Sort-Object LastWriteTime -Descending | Select-Object -First 1 |
+                    Select-Object -ExpandProperty LastWriteTime
+            }
+            $processError = Get-RecentFileText $processErrorPath
+            if ($processError) {
+                Show-LaunchError "DSH reported an error and startup stopped."
+                $launchFailed = $true
+                break
+            }
+            $processOutput = Get-RecentFileText $processOutputPath
+            if ($processOutput -match 'Need to install the following packages|Ok to proceed') {
+                if (-not $upgradePromptAt) { $upgradePromptAt = Get-Date }
+                if (((Get-Date) - $upgradePromptAt).TotalSeconds -ge $upgradeTimeout) {
+                    Show-LaunchError "Package upgrade confirmation did not finish within $upgradeTimeout seconds."
+                    $launchFailed = $true
+                    break
+                }
+            }
+            if ($cmdProc.HasExited -and -not $serverReady) {
+                Show-LaunchError "DSH exited unexpectedly (exit code: $($cmdProc.ExitCode))."
+                $launchFailed = $true
+                break
+            }
+            if (((Get-Date) - $lastOutputAt).TotalSeconds -ge $upgradeTimeout -and -not $serverReady) {
+                Show-LaunchError "DSH produced no output for $upgradeTimeout seconds; startup may be stuck."
+                $launchFailed = $true
+                break
+            }
             try {
                 $r = Invoke-WebRequest $url -UseBasicParsing -TimeoutSec 2
                 if ($r.StatusCode -eq 200) { $serverReady = $true; break }
@@ -278,7 +382,8 @@ public static extern bool SetForegroundWindow(IntPtr hWnd);
                 $serverPid | Set-Content $lockFile -ErrorAction SilentlyContinue
                 Log "  Tracking server PID $serverPid (port 3080 listener)"
             }
-        } else {
+        } elseif (-not $launchFailed) {
+            Show-LaunchError "DSH did not start within $startupTimeout seconds."
             Log "  Server did not become ready (Chrome loading page will show error)"
         }
 
@@ -290,26 +395,30 @@ public static extern bool SetForegroundWindow(IntPtr hWnd);
     Log "Cleanup: stopping DSH server..."
     Start-Sleep -Seconds 2
 
-    # Try tracked server PID from lock file
-    $trackedPid = Get-Content $lockFile -ErrorAction SilentlyContinue
-    if ($trackedPid -match '^\d+$') {
-        $trackedProc = Get-Process -Id $trackedPid -ErrorAction SilentlyContinue
-        if ($trackedProc) {
-            Log "  stopping process PID=$trackedPid ($($trackedProc.ProcessName))"
-            Stop-ProcessTree $trackedPid
+    if ($ownsServer) {
+        # Try tracked server PID from lock file
+        $trackedPid = Get-Content $lockFile -ErrorAction SilentlyContinue
+        if ($trackedPid -match '^\d+$' -and [int]$trackedPid -ne $pid) {
+            $trackedProc = Get-Process -Id $trackedPid -ErrorAction SilentlyContinue
+            if ($trackedProc) {
+                Log "  stopping process PID=$trackedPid ($($trackedProc.ProcessName))"
+                Stop-ProcessTree $trackedPid
+            }
         }
-    }
 
-    # Fallback: stop the cmd.exe we launched (and its descendants)
-    if ($cmdProc -and -not $cmdProc.HasExited) {
-        Stop-ProcessTree $cmdProc.Id
-    }
+        # Fallback: stop the cmd.exe we launched (and its descendants)
+        if ($cmdProc -and -not $cmdProc.HasExited) {
+            Stop-ProcessTree $cmdProc.Id
+        }
 
-    # Final safety: check if anything is still listening on port 3080
-    $leftover = Get-ServerPid
-    if ($leftover) {
-        Log "  found leftover listener PID=$leftover — stopping"
-        Stop-ProcessTree $leftover
+        # Final safety: check if anything is still listening on port 3080
+        $leftover = Get-ServerPid
+        if ($leftover) {
+            Log "  found leftover listener PID=$leftover — stopping"
+            Stop-ProcessTree $leftover
+        }
+    } else {
+        Log "  DSH was already running before launch — leaving its server untouched"
     }
 
     Remove-Item $lockFile -ErrorAction SilentlyContinue

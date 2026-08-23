@@ -5,7 +5,7 @@
 # 功能：
 #   0. 环境探测（管理员 / 系统版本 / 桌面路径）
 #   1. 确认项目安装路径 + 工作区路径
-#   2. 检查 Node.js / npm / npx / Chrome / git，缺失则经确认后自动安装
+#   2. 检查 Node.js / pnpm / Chrome / git，缺失则经确认后自动安装
 #   3. 安装缺失组件（Node 走 npmmirror 镜像；管理员用 MSI，无管理员用便携版）
 #   4. 复制项目骨架文件（不含任何个人数据 / API Key / 会话历史）
 #   5. 创建桌面快捷方式
@@ -185,7 +185,7 @@ try {
 
     $ws = ""
     while ([string]::IsNullOrWhiteSpace($ws)) {
-        $ws = Read-Host "工作区路径 (必填，npx 在此目录运行，例如 D:\WorkSpace\my-project)"
+        $ws = Read-Host "工作区路径 (必填，pnpm 在此目录运行，例如 D:\WorkSpace\my-project)"
         if ([string]::IsNullOrWhiteSpace($ws)) { Write-Warn "工作区路径不能为空，请重新输入" }
     }
     $ws = [System.IO.Path]::GetFullPath($ws.Trim())
@@ -201,7 +201,7 @@ try {
     }
     Write-Ok "工作区路径: $ws"
 
-    # 写 workdir.txt（launcher.ps1 会读取它决定 npx 运行目录）
+    # 写 workdir.txt（launcher.ps1 会读取它决定 pnpm 运行目录）
     $scriptsDir = Join-Path $projectPath "scripts"
     New-Item -ItemType Directory -Force -Path $scriptsDir | Out-Null
     Set-Content -Path (Join-Path $scriptsDir "workdir.txt") -Value $ws -Encoding UTF8
@@ -222,13 +222,14 @@ try {
 
     $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
     $npmCmd  = Get-Command npm  -ErrorAction SilentlyContinue
-    $npxCmd  = Get-Command npx  -ErrorAction SilentlyContinue
-    if ($nodeCmd -and $npmCmd -and $npxCmd) {
+    $pnpmCmd = Get-Command pnpm -ErrorAction SilentlyContinue
+    if ($nodeCmd -and $npmCmd -and $pnpmCmd) {
         Write-Ok ("Node.js 已安装: " + (& node -v))
     } else {
-        Write-Warn "未检测到完整的 Node.js / npm / npx 环境"
+        Write-Warn "未检测到完整的 Node.js / npm / pnpm 环境"
         $needInstall += "node"
     }
+    if (-not $pnpmCmd) { $needInstall += "pnpm"; Write-Warn "未检测到 pnpm，将在确认后启用 Corepack" }
 
     $chromePath = Find-Chrome
     if ($chromePath) { Write-Ok "Chrome 已安装: $chromePath" }
@@ -265,6 +266,19 @@ try {
 
         if ($needInstall -contains "chrome") {
             if (Confirm-YesNo "是否安装 Google Chrome（当前用户，静默安装）？" $true) { Install-Chrome }
+        }
+
+        if ($needInstall -contains "pnpm") {
+            if (Confirm-YesNo "是否启用 Corepack 并安装 pnpm？" $true) {
+                & corepack enable
+                Refresh-PathEnv
+                if (-not (Get-Command pnpm -ErrorAction SilentlyContinue)) {
+                    throw "pnpm 安装失败，请手动执行 corepack enable 或 npm install --global pnpm"
+                }
+                Write-Ok "pnpm 已安装: $(& pnpm -v)"
+            } else {
+                Write-Warn "未安装 pnpm，桌面启动器将无法运行"
+            }
         }
     }
 
@@ -316,14 +330,14 @@ try {
 
     try { Write-Info ("  node : " + (& node -v)) } catch { Write-Warn "node 未生效，请重开终端后再试" }
     try { Write-Info ("  npm  : " + (& npm  -v)) } catch { Write-Warn "npm 未生效，请重开终端后再试" }
-    try { Write-Info ("  npx  : " + (& npx  -v)) } catch { Write-Warn "npx 未生效，请重开终端后再试" }
+    try { Write-Info ("  pnpm : " + (& pnpm -v)) } catch { Write-Warn "pnpm 未生效，请重开终端后再试" }
     if (Find-Chrome) { Write-Ok "Chrome 检测正常" }
 
-    if (Confirm-YesNo "是否现在自动预热（npx 拉取官方 @deepseek-ai/dsh，约 1-3 分钟）？" $true) {
-        Write-Info "执行: npx -y @deepseek-ai/dsh --version"
+    if (Confirm-YesNo "是否现在自动预热（pnpm 拉取官方 @deepseek-ai/dsh，约 1-3 分钟）？" $true) {
+        Write-Info "执行: pnpm dlx @deepseek-ai/dsh --version"
         Push-Location $ws
         try {
-            & npx -y @deepseek-ai/dsh --version
+            & pnpm dlx @deepseek-ai/dsh --version
             Write-Ok "官方 dsh 已拉取成功"
         } catch {
             Write-Warn "预热未完成，可稍后手动运行（见下方说明）"
@@ -344,9 +358,9 @@ try {
     Write-Host ""
     Write-Host "  首次使用：" -ForegroundColor Cyan
     Write-Host "    1) 打开 PowerShell / CMD，运行：" -ForegroundColor Yellow
-    Write-Host "         npx -y @deepseek-ai/dsh web" -ForegroundColor White
+    Write-Host "         pnpm dlx @deepseek-ai/dsh web" -ForegroundColor White
     Write-Host "       （首次会拉取官方 dsh 并初始化 profile，看到 http://127.0.0.1:$APP_PORT 即成功）" -ForegroundColor Gray
-    Write-Host "    2) 之后直接双击桌面图标即可（launcher 已带 -y，会自动拉包）" -ForegroundColor Gray
+    Write-Host "    2) 之后直接双击桌面图标即可（launcher 会自动确认升级并拉包）" -ForegroundColor Gray
     Write-Host ""
     Write-Host "  提示：" -ForegroundColor Cyan
     Write-Host "    - 若本终端 node/npm 命令未生效，请关闭并重开终端（PATH 刷新）" -ForegroundColor Gray

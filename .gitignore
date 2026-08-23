@@ -8,6 +8,9 @@ storages/
 # 运行时产物
 scripts/app.pid
 scripts/dsh-launch.log
+scripts/dsh-process-output.log
+scripts/dsh-process-error.log
+scripts/launch-error.html
 scripts/workdir.txt
 setup.log
 *.log

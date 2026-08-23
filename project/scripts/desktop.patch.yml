@@ -1,0 +1,7 @@
+# Desktop launcher override: the launcher opens its own Chrome app window.
+- id: web-runtime
+  config:
+    openBrowser: false
+    printUrl: true
+    surfaceContext: true
+    trustedHosts: !!js ctx.webStartup.trustedHosts

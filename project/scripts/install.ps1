@@ -1,14 +1,14 @@
-﻿# ============================================================================
+# ============================================================================
 # DeepSeek Harness - Desktop App Installer
 # ============================================================================
 # Creates/updates the desktop shortcut that launches DSH silently:
 #   Desktop "DeepSeek Harness" shortcut
 #     → wscript.exe "DeepSeek Harness.vbs"
 #       → powershell.exe -WindowStyle Hidden
-#         → launcher.ps1 → npx @deepseek-ai/dsh web → Chrome --app=...
+#         → launcher.ps1 → pnpm dlx @deepseek-ai/dsh --profile web --patch desktop.patch.yml → Chrome --app=...
 # ============================================================================
 # Usage:
-#   powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.dsh\scripts\install.ps1"
+#   powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\.dsh\scripts\install.ps1"
 # ============================================================================
 
 $ErrorActionPreference = "Stop"
@@ -24,7 +24,7 @@ $shortcutPath = "$desktopDir\DeepSeek Harness.lnk"
 
 # Workspace directory — read from workdir.txt if present, else default
 $workDirCfg = "$scriptsDir\workdir.txt"
-$workDir = "D:\WorkSpace\dsh"                         # fallback default
+$workDir = $env:USERPROFILE                             # fallback default
 if (Test-Path $workDirCfg) {
     $txt = (Get-Content $workDirCfg -ErrorAction SilentlyContinue | Select-Object -First 1).Trim()
     if ($txt) { $workDir = $txt }
@@ -78,7 +78,7 @@ if (Test-Path $icoPath) {
     Write-Host "  [WARN] dsh.ico not found — shortcut will use default icon" -ForegroundColor Yellow
     Write-Host ""
     Write-Host "  === Manual Icon Setup ===" -ForegroundColor Cyan
-    Write-Host "  1. Start DSH: npx @deepseek-ai/dsh web" -ForegroundColor Cyan
+    Write-Host "  1. Start DSH: pnpm dlx @deepseek-ai/dsh web" -ForegroundColor Cyan
     Write-Host "  2. Open http://127.0.0.1:3080/favicon.svg in browser" -ForegroundColor Cyan
     Write-Host "  3. Save the SVG content as favicon.svg" -ForegroundColor Cyan
     Write-Host "  4. Visit https://convertio.co/svg-ico/ to convert SVG to ICO" -ForegroundColor Cyan
@@ -133,7 +133,7 @@ Write-Host "  Target     : DeepSeek Harness.vbs (in project folder)" -Foreground
 Write-Host "  Start in   : $workDir" -ForegroundColor Cyan
 Write-Host "  ─────────────────────────────────────" -ForegroundColor DarkGray
 Write-Host "  VBS →      : powershell.exe -WindowStyle Hidden" -ForegroundColor DarkGray
-Write-Host "  PS1 →      : launcher.ps1 → npx + Chrome" -ForegroundColor DarkGray
+Write-Host "  PS1 →      : launcher.ps1 → pnpm dlx + Chrome" -ForegroundColor DarkGray
 Write-Host "  Log        : $dshHome\scripts\dsh-launch.log" -ForegroundColor DarkGray
 Write-Host "  Work Dir   : $workDir  (edit workdir.txt to change)" -ForegroundColor DarkGray
 Write-Host "===========================================" -ForegroundColor Cyan

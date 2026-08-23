@@ -2,33 +2,36 @@
 
 DeepSeek Harness（官方 `@deepseek-ai/dsh`）的 **Windows 桌面化一键安装包**：把个人电脑上已经调好的 DSH Web 应用，完整、干净地迁移到另一台 Windows 电脑（公司电脑 / 新电脑），并生成一个「双击即用」的桌面图标。
 
-> 核心内核是官方的 `npx @deepseek-ai/dsh web` 命令，本仓库不修改、不打包任何官方代码，只负责**环境检查、组件安装、配置落地、桌面快捷方式**，以及一个让启动过程全程无黑框、带加载页的启动器。
+> 核心内核是官方的 `pnpm dlx @deepseek-ai/dsh web` 命令。本仓库不修改、不打包任何官方代码，只负责**环境检查、组件安装、配置落地、桌面快捷方式**，以及一个让启动过程全程无黑框、带加载页的启动器。
 
 ---
 
 ## 这是什么
 
-- **官方内核**：启动即 `npx @deepseek-ai/dsh web`，拉起 DeepSeek Harness 的 Web 界面（`http://127.0.0.1:3080`）。
+- **官方内核**：启动即 `pnpm dlx @deepseek-ai/dsh web`，拉起 DeepSeek Harness 的 Web 界面（`http://127.0.0.1:3080`）。
 - **桌面应用体验**：桌面图标 → 隐藏窗口启动服务 → 自动打开一个无地址栏的 Chrome 应用窗口，看起来像原生 App。
 - **一键装机**：`setup.ps1` 自动检查并安装 Node.js / Chrome，自动落配置、建快捷方式。
 - **可迁移**：整个仓库就是一套「搬家工具」，把 DSH 从一台电脑搬到另一台电脑，**不带任何个人数据**。
 
 ## 特性
 
-- 环境自检：自动探测管理员权限、系统版本、桌面路径、Node/npm/npx/Chrome/git 是否就绪。
+- 环境自检：自动探测管理员权限、系统版本、桌面路径、Node/pnpm/Chrome/git 是否就绪。
 - 缺啥装啥：Node.js 走国内 npmmirror 镜像下载；管理员用官方 MSI，无管理员自动降级为便携版；Chrome 用官方 per-user 安装器（免管理员）。
-- 隐藏启动：PowerShell 与 npx 均以隐藏窗口运行，全程无黑框。
+- 隐藏启动：PowerShell 与 pnpm 均以隐藏窗口运行，全程无黑框。
 - 秒开加载页：服务冷启动时先开加载页（loading.html），就绪后自动跳转，不用干等。
 - 进程级清理：关闭 Chrome 窗口即自动停掉对应的 DSH 服务，不误杀其它 Node 进程。
 - 防重复启动：PID 锁 + 端口检测，避免开多个实例。
 - 日志轮转：启动日志自动截断（500 行 / 1MB），不会无限膨胀。
+- 自动确认升级：隐藏桌面启动会自动确认 pnpm 的 DSH 安装提示。
+- 启动保护：升级或启动阶段 30 秒无输出、或 120 秒未就绪会停止并显示错误页面。
+- `dshweb` 快捷命令：复用已有服务或启动 DSH，并输出官方版本号。
 
 ## 系统要求
 
 | 组件 | 要求 |
 |------|------|
 | 操作系统 | Windows 10 / 11（含 LTSB / LTSC），64 位 |
-| Node.js | 22 LTS 推荐（脚本自动装，含 npm / npx） |
+| Node.js | 22 LTS 推荐（脚本自动装，含 npm；pnpm 需已安装） |
 | 浏览器 | Google Chrome（脚本自动装） |
 | 网络 | 能访问 `registry.npmmirror.com`（脚本默认走国内镜像） |
 | 权限 | 有管理员权限用 MSI 装 Node；无管理员自动用便携版，均无需手工干预 |
@@ -59,22 +62,22 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1
 脚本会一步步询问并自动执行：
 
 1. 确认 **项目安装路径**（默认 `C:\Users\<你>\.dsh`，与个人电脑保持一致）；
-2. 输入 **工作区路径**（npx 的运行目录，必填，例如 `D:\WorkSpace\my-project`）；
+2. 输入 **工作区路径**（pnpm 的运行目录，必填，例如 `D:\WorkSpace\my-project`）；
 3. 缺失的 Node.js / Chrome 会先列出，确认后自动下载安装；
 4. 复制骨架文件、创建桌面快捷方式；
 5. 自动配置 npm 国内镜像，并可选「预热」拉取官方 dsh。
 
 ## 首次运行
 
-安装完成后，**第一次**请在一个看得见的终端里执行（用于拉取官方 dsh 并初始化 profile）：
+安装完成后，**第一次**可在一个看得见的终端里执行（用于拉取官方 dsh 并初始化 profile）：
 
 ```powershell
-npx -y @deepseek-ai/dsh web
+pnpm dlx @deepseek-ai/dsh web
 ```
 
 看到 `http://127.0.0.1:3080` 即成功。之后直接双击桌面「DeepSeek Harness」图标即可（启动器已带 `-y`，会自动拉包）。
 
-> 说明：`-y` 让 npx 首次自动确认安装，避免在隐藏窗口里卡在 “Ok to proceed?” 的交互提示。
+> 说明：桌面 launcher 会自动确认 pnpm 的安装提示；手动运行时请按终端提示确认。
 
 ## 日常使用
 
@@ -83,6 +86,23 @@ npx -y @deepseek-ai/dsh web
 - **改工作区**：编辑 `%USERPROFILE%\.dsh\scripts\workdir.txt`，写一行新路径即可。
 - **看日志**：`%USERPROFILE%\.dsh\scripts\dsh-launch.log`。
 
+也可以在 PowerShell profile 中添加 `dshweb`，从任意项目目录启动或复用 DSH：
+
+```powershell
+function dshweb {
+  $version = (& pnpm.cmd dlx @deepseek-ai/dsh --version 2>$null | Select-Object -First 1)
+  if ($version) { Write-Host "DeepSeek Harness v$version" }
+  $url = 'http://127.0.0.1:3080'
+  try {
+    $response = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
+    if ($response.StatusCode -eq 200) { Start-Process $url; return }
+  } catch {}
+  'y' | & pnpm.cmd dlx @deepseek-ai/dsh web
+}
+```
+
+当前官方 Web 前端左上角的 `DeepSeek Harness` 是固定打包文本，项目配置无法直接追加 CLI 版本号；`dshweb` 会输出官方版本，桌面 loading 页也会显示启动时读取到的版本。
+
 ## 工作原理
 
 ```
@@ -90,11 +110,11 @@ npx -y @deepseek-ai/dsh web
   → DeepSeek Harness.vbs（Windows 原生执行）
     → powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass
       → launcher.ps1
-        → 预检 Node / npx / Chrome
-        → 后台启动: npx -y @deepseek-ai/dsh web
+        → 预检 Node / pnpm / Chrome
+        → 后台启动: pnpm dlx @deepseek-ai/dsh web
         → 立即打开 Chrome 到 loading.html（加载页）
         → 服务就绪后自动跳转 http://127.0.0.1:3080
-        → Chrome 关闭时，按进程树清理 DSH 服务
+        → Chrome 关闭时，仅清理本次桌面启动的 DSH 服务
 ```
 
 ## 目录结构
@@ -106,7 +126,7 @@ DSH-Desktop/
 ├── .gitignore
 └── project/                  # 要落到目标电脑的骨架
     ├── scripts/
-    │   ├── launcher.ps1      # 启动器（npx -y + Chrome 加载页 + 进程清理）
+    │   ├── launcher.ps1      # 启动器（pnpm dlx + Chrome 加载页 + 进程清理）
     │   ├── install.ps1       # 单独刷新 / 重建桌面快捷方式
     │   ├── DeepSeek Harness.vbs
     │   ├── loading.html
@@ -116,7 +136,7 @@ DSH-Desktop/
 ```
 
 > 注意：`profiles/node_modules`、`sessions/`、`storages/` 均为机器相关数据（node_modules 是指向
-> npx 缓存的软链接），**不要**复制到新电脑，dsh 首次运行会自动重建。
+> pnpm 缓存的软链接），**不要**复制到新电脑，dsh 首次运行会自动重建。
 
 ## 卸载
 
