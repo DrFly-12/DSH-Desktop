@@ -38,6 +38,16 @@ DeepSeek Harness（官方 `@deepseek-ai/dsh`）的 **Windows 桌面化一键安�
 
 ## 快速开始（安装）
 
+### 一条命令安装并启动（推荐）
+
+在 PowerShell 中粘贴并执行下面这一段。它会从 GitHub 下载最新代码到临时目录，启动安装脚本；安装完成并按回车退出后，会自动打开桌面版 DSH：
+
+```powershell
+$zip = Join-Path $env:TEMP "DSH-Desktop-$([guid]::NewGuid().ToString('N')).zip"; $dir = Join-Path $env:TEMP "DSH-Desktop-$([guid]::NewGuid().ToString('N'))"; Invoke-WebRequest "https://github.com/DrFly-12/DSH-Desktop/archive/refs/heads/main.zip" -OutFile $zip; Expand-Archive $zip -DestinationPath $dir; $root = Get-ChildItem $dir -Directory | Select-Object -First 1; & powershell.exe -ExecutionPolicy Bypass -File (Join-Path $root.FullName 'setup.ps1'); $shortcut = Join-Path ([Environment]::GetFolderPath('Desktop')) 'DeepSeek Harness.lnk'; if (Test-Path $shortcut) { Start-Process $shortcut }
+```
+
+命令仍会询问安装路径和工作区路径，这是为了避免把 DSH 配置或项目文件写错位置。安装完成后无需再手动执行 `pnpm dlx`，直接关闭安装窗口即可看到 DSH 启动窗口。
+
 ### 1. 获取本仓库
 
 任选其一：
