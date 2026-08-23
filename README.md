@@ -43,12 +43,12 @@ DeepSeek Harness（官方 `@deepseek-ai/dsh`）的 **Windows 桌面化一键安�
 在 PowerShell 中执行下面这一条命令。它会从 GitHub 下载最新安装器并启动；安装完成并按回车退出后，会自动打开桌面版 DSH：
 
 ```powershell
-irm https://raw.githubusercontent.com/DrFly-12/DSH-Desktop/main/dsh.ps1 | iex
+irm https://github.com/DrFly-12/DSH-Desktop/raw/main/dsh.ps1 | iex
 ```
 
 它等价于官方 CLI 的短命令风格：远程引导脚本只负责下载临时安装包，正式的 `setup.ps1` 仍会询问安装路径和工作区路径。安装完成后无需再手动执行 `pnpm dlx`，直接关闭安装窗口即可看到 DSH 启动窗口。
 
-> 安全提示：执行前可先在浏览器打开 [dsh.ps1](https://raw.githubusercontent.com/DrFly-12/DSH-Desktop/main/dsh.ps1) 检查脚本内容；公司安全策略禁止 `irm | iex` 时，请使用下方的 ZIP 下载方式。
+> 安全提示：执行前可先在浏览器打开 [dsh.ps1](https://github.com/DrFly-12/DSH-Desktop/raw/main/dsh.ps1) 检查脚本内容；公司安全策略禁止 `irm | iex` 时，请使用下方的 ZIP 下载方式。
 
 ### 1. 获取本仓库
 
