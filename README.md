@@ -18,13 +18,16 @@ DeepSeek Harness（官方 `@deepseek-ai/dsh`）的 **Windows 桌面化一键安�
 - 环境自检：自动探测管理员权限、系统版本、桌面路径、Node/pnpm/Chrome/git 是否就绪。
 - 缺啥装啥：Node.js 走国内 npmmirror 镜像下载；管理员用官方 MSI，无管理员自动降级为便携版；Chrome 用官方 per-user 安装器（免管理员）。
 - 隐藏启动：PowerShell 与 pnpm 均以隐藏窗口运行，全程无黑框。
-- 秒开加载页：服务冷启动时先开加载页（loading.html），就绪后自动跳转，不用干等。
+- 首次打开即已登录：DSH `0.1.5-rc.x` 起 Web 界面走 cookie 认证（裸请求返回 `401`）。启动器会等它启动时打印的一次性 `?token=` 地址（约 4-6 秒），再用该地址打开 Chrome —— 只有浏览器**自发导航**才带得住那个 `SameSite=Strict` cookie，界面第一次就登录成功。
+- 慢启动兜底：若 20 秒内等不到 token（例如正在升级依赖），改开加载页（loading.html）显示进度；该路径下 cookie 同样会存下，按一次刷新即可进入。
 - 进程级清理：关闭 Chrome 窗口即自动停掉对应的 DSH 服务，不误杀其它 Node 进程。
 - 防重复启动：PID 锁 + 端口检测，避免开多个实例。
 - 日志轮转：启动日志自动截断（500 行 / 1MB），不会无限膨胀。
 - 自动确认升级：隐藏桌面启动会自动确认 pnpm 的 DSH 安装提示。
 - 启动保护：升级或启动阶段 30 秒无输出、或 120 秒未就绪会停止并显示错误页面。
-- `dshweb` 快捷命令：复用已有服务或启动 DSH，并输出官方版本号。
+- 僵尸锁自动回收：崩溃或强杀遗留的 `<文件>.lock` 会在冷启动前清掉 —— `dsh-atomic-write` 明确不自动回收孤儿锁（源码原话 "orphan recovery is an operator action"），等待上限只有 2 秒，不处理则每次启动都死在 `timed out waiting for the writer lock`。清理只针对 PID 已死的锁，活锁保留。
+- 认证感知的就绪探测：Web 界面无 cookie 时返回 `401`，这被判定为"服务正常在跑"而非"没起来"（`Invoke-WebRequest` 遇非 2xx 直接抛异常，只看 200 会把健康服务误判为宕机）；只有传输失败才算不可用。
+- `dshweb` 快捷命令：复用已有服务或启动 DSH，并输出官方版本号（同样按 401/403 判定服务存活，不会误判成"没起"而重复启动撞 `EADDRINUSE`）。
 
 ## 系统要求
 
@@ -102,13 +105,23 @@ pnpm dlx @deepseek-ai/dsh web
 
 ```powershell
 function dshweb {
+  $url = 'http://127.0.0.1:3080'
+  # 裸请求回 401/403 同样说明服务活着：新版 Web 界面走 cookie 认证，
+  # 而 Invoke-WebRequest 遇到任何非 2xx 都会抛异常。只判断 200 会把
+  # 正在运行的服务误判为"没起来"，于是重复启动并撞上 EADDRINUSE。
+  $alive = $false
+  try {
+    $null = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
+    $alive = $true
+  } catch {
+    try { if ([int]$_.Exception.Response.StatusCode -in 401, 403) { $alive = $true } } catch {}
+  }
+  if ($alive) {
+    Start-Process $url
+    return
+  }
   $version = (& pnpm.cmd dlx @deepseek-ai/dsh --version 2>$null | Select-Object -First 1)
   if ($version) { Write-Host "DeepSeek Harness v$version" }
-  $url = 'http://127.0.0.1:3080'
-  try {
-    $response = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
-    if ($response.StatusCode -eq 200) { Start-Process $url; return }
-  } catch {}
   'y' | & pnpm.cmd dlx @deepseek-ai/dsh web
 }
 ```
@@ -122,10 +135,12 @@ function dshweb {
   → DeepSeek Harness.vbs（Windows 原生执行）
     → powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass
       → launcher.ps1
-        → 预检 Node / pnpm / Chrome
-        → 后台启动: pnpm dlx @deepseek-ai/dsh web
-        → 立即打开 Chrome 到 loading.html（加载页）
-        → 服务就绪后自动跳转 http://127.0.0.1:3080
+        → 预检 Node / pnpm / Chrome，并清理 PID 已死的僵尸锁
+        → 若 DSH 已在运行：直接用当前会话的 token 地址打开 Chrome（瞬时，已登录）
+        → 若未运行：后台启动 pnpm dlx @deepseek-ai/dsh --profile web --patch desktop.patch.yml
+             → 等它打印 "?token=..."（最多 20 秒）
+                 等到 token → 用带 token 的地址打开 Chrome（打开即已登录）
+                 没等到     → 打开 loading.html 显示进度，就绪后跳转（必要时刷新一次）
         → Chrome 关闭时，仅清理本次桌面启动的 DSH 服务
 ```
 
@@ -165,6 +180,9 @@ DSH-Desktop/
 - **AppLocker / SRP 拦截 wscript 或 ps1**：属公司安全策略，需 IT 放行。
 - **下载超时 / 连不上镜像**：确认能访问 `registry.npmmirror.com`；公司有代理时先设置 `$env:HTTP_PROXY` / `$env:HTTPS_PROXY` 再运行。
 - **端口 3080 被占用**：dsh 只监听 `127.0.0.1:3080`（本机回环），一般无需防火墙放行；若被占用可结束占用进程或改端口（需同步改 `launcher.ps1` 与 `loading.html`）。
+- **报 `EADDRINUSE: address already in use 127.0.0.1:3080`**：已经有一个实例在跑（可能是上次异常退出留下的）。先结束占用 3080 的进程再启动。桌面启动器与 `dshweb` 都已按 401 判定服务存活，不会再重复拉起。
+- **窗口显示 `dsh web authentication required`**：本次请求没带上认证 cookie。从 `%USERPROFILE%\.dsh\scripts\dsh-launch.log` 取 `Auth URL (needed only if the browser shows 401):` 那一行，粘进地址栏访问一次即可；此后 30 天内免登录。
+- **报 `timed out waiting for the writer lock`**：`%USERPROFILE%\.dsh\.credentials.yaml.lock` 是进程被强杀后遗留的孤儿写锁。启动器会在冷启动前自动清理；手动处理时先确认锁里记录的 PID 已不存在，再删除该 `.lock` 文件（**不要动 `.credentials.yaml` 本体**）。
 - **要迁移个人配置**：把旧电脑 `%USERPROFILE%\.dsh\settings.yaml` 复制到新电脑同名位置即可；**API Key 建议在网页界面重新填写**，不要用明文文件跨机拷贝。
 
 ## 隐私说明

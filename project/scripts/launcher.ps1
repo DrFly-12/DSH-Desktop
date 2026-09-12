@@ -1,4 +1,4 @@
-# DeepSeek Harness - PowerShell Launcher
+﻿# DeepSeek Harness - PowerShell Launcher
 # Completely hidden console, opens Chrome immediately with a loading page
 # while the DSH server starts in the background.
 # Architecture: Desktop shortcut → powershell -WindowStyle Hidden → this script
@@ -20,6 +20,7 @@ $desktopPatchPath = "$dshHome\scripts\desktop.patch.yml"
 $errorPagePath = "$dshHome\scripts\launch-error.html"
 $processOutputPath = "$dshHome\scripts\dsh-process-output.log"
 $processErrorPath = "$dshHome\scripts\dsh-process-error.log"
+$tokenJsPath = "$dshHome\scripts\token.js"
 $url = "http://127.0.0.1:3080"
 
 # Workspace directory where pnpm runs (your project root).
@@ -48,12 +49,97 @@ $maxLogBytes = 1MB
 $maxLogLines = 500
 $startupTimeout = 120       # max seconds for server to become ready
 $upgradeTimeout = 30        # max seconds after a package-install prompt appears
+$tokenWaitSeconds = 20      # max seconds to wait for the one-time token before
+                            # falling back to the loading page (see Step 3)
 
 # ---- Helper functions ----
 
 function Log($msg) {
     $line = "$(Get-Date -Format 'yyyy/MM/dd HH:mm:ss') - $msg"
     Add-Content -Path $logFile -Value $line -Encoding UTF8
+}
+
+function Clear-StaleLock($LockPath) {
+    # dsh-atomic-write creates "<file>.lock" with the owner PID as its content
+    # and never removes an existing lock on its own: orphan recovery is an
+    # operator action by design. A crashed or force-killed run therefore leaves
+    # the next launch stuck on "atomic-write: timed out waiting for the writer
+    # lock". Clear it only when the recorded owner PID is no longer running.
+    if (-not (Test-Path $LockPath)) { return }
+    $owner = (Get-Content $LockPath -ErrorAction SilentlyContinue | Select-Object -First 1)
+    if ($owner) { $owner = $owner.Trim() }
+    $ownerAlive = $false
+    if ($owner -match '^\d+$') {
+        $ownerProc = Get-Process -Id ([int]$owner) -ErrorAction SilentlyContinue
+        if ($ownerProc) { $ownerAlive = $true }
+    }
+    if ($ownerAlive) {
+        Log "  Lock still held by live PID $owner - $LockPath"
+    } else {
+        Remove-Item $LockPath -Force -ErrorAction SilentlyContinue
+        if (Test-Path $LockPath) {
+            Log "  WARNING: could not clear stale lock $LockPath"
+        } else {
+            Log "  Cleared stale lock $LockPath (owner PID '$owner' is gone)"
+        }
+    }
+}
+
+function Clear-StaleLocks {
+    Get-ChildItem -Path $dshHome -Filter '*.lock' -File -ErrorAction SilentlyContinue |
+        ForEach-Object { Clear-StaleLock $_.FullName }
+    # Profile roots and one level below only - never recurse into node_modules.
+    $profileRoot = Join-Path $dshHome 'profiles'
+    if (-not (Test-Path $profileRoot)) { return }
+    Get-ChildItem -Path $profileRoot -Filter '*.lock' -File -ErrorAction SilentlyContinue |
+        ForEach-Object { Clear-StaleLock $_.FullName }
+    Get-ChildItem -Path (Join-Path $profileRoot '*') -Directory -ErrorAction SilentlyContinue |
+        ForEach-Object {
+            $profileDir = $_.FullName
+            Get-ChildItem -Path $profileDir -Filter '*.lock' -File -ErrorAction SilentlyContinue |
+                ForEach-Object { Clear-StaleLock $_.FullName }
+        }
+}
+
+function Test-DshServing($Url, $TimeoutSec = 3) {
+    # The Web GUI sits behind a browser auth cookie: a bare request is answered
+    # with 401, and Invoke-WebRequest raises on any non-2xx status. So "reachable
+    # but rejected" still means the server is up and serving — only a transport
+    # failure means it is not running. Reading 401 as "down" made every launch
+    # wait out the full startup timeout and then report failure against a server
+    # that had been healthy the whole time.
+    try {
+        $resp = Invoke-WebRequest $Url -UseBasicParsing -TimeoutSec $TimeoutSec -ErrorAction Stop
+        return ($resp.StatusCode -ge 200 -and $resp.StatusCode -lt 500)
+    } catch {
+        $code = 0
+        $r = $_.Exception.Response
+        if ($r -and $r.StatusCode) {
+            try { $code = [int]$r.StatusCode } catch { $code = 0 }
+        }
+        return ($code -eq 401 -or $code -eq 403)
+    }
+}
+
+function Get-DshToken {
+    # DSH prints its one-time URL as "dsh web: http://127.0.0.1:3080/?token=...".
+    # A new token is issued on every launch, so it must be read fresh each time.
+    $out = Get-RecentFileText $processOutputPath
+    if ($out -match '\?token=([A-Za-z0-9_\-]+)') { return $Matches[1] }
+    return $null
+}
+
+function Reset-TokenJs {
+    # The loading page picks the token up through a <script> tag: a file:// page
+    # may not fetch() or XHR a sibling file, but it may load one as a script.
+    # Cleared at launch so a token from an earlier run can never point the
+    # browser at a session that no longer exists.
+    Set-Content -Path $tokenJsPath -Value 'window.__DSH_TOKEN__ = "";' -Encoding ASCII -ErrorAction SilentlyContinue
+}
+
+function Publish-TokenJs($Token) {
+    # Only [A-Za-z0-9_-] reaches here, so no escaping is needed.
+    Set-Content -Path $tokenJsPath -Value ('window.__DSH_TOKEN__ = "' + $Token + '";') -Encoding ASCII -ErrorAction SilentlyContinue
 }
 
 function Rotate-Log {
@@ -267,13 +353,10 @@ public static extern bool SetForegroundWindow(IntPtr hWnd);
     # ---- Step 1: Check if DSH is already running ----
     $dsAlreadyRunning = $false
     Log "Step 1: Checking if DSH already running..."
-    try {
-        $r = Invoke-WebRequest $url -UseBasicParsing -TimeoutSec 3
-        if ($r.StatusCode -eq 200) {
-            Log "DSH already serving on $url — skip backend launch"
-            $dsAlreadyRunning = $true
-        }
-    } catch {
+    if (Test-DshServing $url) {
+        Log "DSH already serving on $url — skip backend launch"
+        $dsAlreadyRunning = $true
+    } else {
         Log "DSH not responding — will start"
     }
 
@@ -281,14 +364,29 @@ public static extern bool SetForegroundWindow(IntPtr hWnd);
     # PATH A: DSH already running → open Chrome directly, instant load
     # ================================================================
     if ($dsAlreadyRunning) {
-        Log "Step 4: Opening Chrome directly (DSH already up)..."
-        $chromeProc = Launch-Chrome -ChromePath $chrome -AppUrl $url
+        # Reuse the live session's token when its output log still carries it.
+        # A browser that already holds the auth cookie opens either URL fine,
+        # but a fresh profile needs the token to get past the 401.
+        $liveToken = Get-DshToken
+        if ($liveToken) {
+            Log "Step 4: Opening Chrome directly with session token..."
+            $openUrl = "$url/?token=$liveToken"
+        } else {
+            Log "Step 4: Opening Chrome directly (DSH already up)..."
+            $openUrl = $url
+        }
+        $chromeProc = Launch-Chrome -ChromePath $chrome -AppUrl $openUrl
         Wait-ForProcessExit $chromeProc "Chrome"
     }
     # ================================================================
     # PATH B: Cold start → pnpm in background + Chrome with loading page
     # ================================================================
     else {
+        # --- Clear stale write locks before a cold start ---
+        # Only on the cold-start path: a live server is the only legitimate
+        # lock holder, so if nothing is serving, any orphaned lock is safe to drop.
+        Clear-StaleLocks
+
         # --- Start pnpm in background ---
         $ownsServer = $true
         Remove-Item $processOutputPath, $processErrorPath, $errorPagePath -Force -ErrorAction SilentlyContinue
@@ -313,14 +411,40 @@ public static extern bool SetForegroundWindow(IntPtr hWnd);
         $cmdProc = [System.Diagnostics.Process]::Start($psi)
         Log "  cmd.exe PID = $($cmdProc.Id)"
 
-        # --- Open Chrome IMMEDIATELY with loading page ---
-        Log "Step 3: Opening Chrome with loading page..."
-        $loadingUrl = "file:///" + ($loadingPath -replace '\\', '/')
-        if (Test-Path $loadingPath) {
-            $chromeProc = Launch-Chrome -ChromePath $chrome -AppUrl $loadingUrl
+        # --- Wait for the session token, then open Chrome already authenticated ---
+        # The GUI is cookie-authenticated and that cookie is SameSite=Strict.
+        # Chrome will STORE the cookie from a tokenised URL, but it will not SEND
+        # it on the redirect that follows a file:// navigation: the opaque file
+        # origin makes the whole chain cross-site, so the cookie is withheld and
+        # the GUI answers 401 even though the cookie is sitting in the jar.
+        # A loading page can therefore never finish the handshake by itself.
+        # Opening Chrome at the tokenised URL makes the navigation browser-
+        # initiated (same-site), so the cookie is accepted and the GUI loads on
+        # the first try. DSH prints the token a few seconds into boot, so this
+        # wait is short; if boot is slower the loading page keeps the user informed.
+        Reset-TokenJs
+        Log "Step 3: Waiting up to ${tokenWaitSeconds}s for the session token..."
+        $sessionToken = $null
+        for ($t = 1; $t -le $tokenWaitSeconds; $t++) {
+            Start-Sleep -Seconds 1
+            if ($cmdProc.HasExited) { break }
+            $sessionToken = Get-DshToken
+            if ($sessionToken) { break }
+        }
+
+        if ($sessionToken) {
+            Publish-TokenJs $sessionToken
+            Log "  Token ready after ${t}s — opening Chrome already authenticated"
+            $chromeProc = Launch-Chrome -ChromePath $chrome -AppUrl "$url/?token=$sessionToken"
         } else {
-            Log "  WARNING: loading.html not found, opening blank page"
-            $chromeProc = Launch-Chrome -ChromePath $chrome -AppUrl "about:blank"
+            Log "  No token after ${tokenWaitSeconds}s (slow boot) — opening loading page"
+            $loadingUrl = "file:///" + ($loadingPath -replace '\\', '/')
+            if (Test-Path $loadingPath) {
+                $chromeProc = Launch-Chrome -ChromePath $chrome -AppUrl $loadingUrl
+            } else {
+                Log "  WARNING: loading.html not found, opening blank page"
+                $chromeProc = Launch-Chrome -ChromePath $chrome -AppUrl "about:blank"
+            }
         }
 
         # --- Poll for server in background while Chrome is open ---
@@ -328,6 +452,7 @@ public static extern bool SetForegroundWindow(IntPtr hWnd);
         $serverReady = $false
         $launchFailed = $false
         $upgradePromptAt = $null
+        $tokenPublished = [bool]$sessionToken
         $lastOutputAt = Get-Date
         $maxAttempts = [math]::Ceiling($startupTimeout / 2)
         for ($i = 1; $i -le $maxAttempts; $i++) {
@@ -367,10 +492,17 @@ public static extern bool SetForegroundWindow(IntPtr hWnd);
                 $launchFailed = $true
                 break
             }
-            try {
-                $r = Invoke-WebRequest $url -UseBasicParsing -TimeoutSec 2
-                if ($r.StatusCode -eq 200) { $serverReady = $true; break }
-            } catch {}
+            # Slow-boot path only: the loading page is on screen and can pick the
+            # token up, but it cannot finish the Strict-cookie handshake from a
+            # file:// origin. Record it so the URL is in the log, and let the
+            # loading page store the cookie; a single reload then gets in.
+            $tok = Get-DshToken
+            if ($tok -and -not $tokenPublished) {
+                $tokenPublished = $true
+                Publish-TokenJs $tok
+                Log "  Session token handed to loading page (reload once if the page shows 401)"
+            }
+            if (Test-DshServing $url -TimeoutSec 2) { $serverReady = $true; break }
             if ($i % 5 -eq 0) { Log "  ...waiting ($($i*2)s / ${startupTimeout}s)" }
         }
 
@@ -381,6 +513,19 @@ public static extern bool SetForegroundWindow(IntPtr hWnd);
             if ($serverPid) {
                 $serverPid | Set-Content $lockFile -ErrorAction SilentlyContinue
                 Log "  Tracking server PID $serverPid (port 3080 listener)"
+            }
+            # The GUI is cookie-authenticated. A browser already holding the
+            # 30-day cookie opens the plain URL fine; record the tokenised URL
+            # here so a fresh browser or a cleared cookie jar still has a way in.
+            $tokenised = $null
+            $out = Get-RecentFileText $processOutputPath
+            if ($out -match '(https?://127\.0\.0\.1:\d+/\?token=[A-Za-z0-9_\-]+)') {
+                $tokenised = $Matches[1]
+            }
+            if ($tokenised) {
+                Log "  Auth URL (needed only if the browser shows 401): $tokenised"
+            } else {
+                Log "  Auth URL not found in output; see dsh-process-output.log"
             }
         } elseif (-not $launchFailed) {
             Show-LaunchError "DSH did not start within $startupTimeout seconds."

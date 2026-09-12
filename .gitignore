@@ -14,3 +14,11 @@ scripts/launch-error.html
 scripts/workdir.txt
 setup.log
 *.log
+
+# project/scripts 下同样只应有骨架文件；以下均为部署后才生成的运行时产物
+# token.js 会写入会话 token，绝不可提交
+project/scripts/token.js
+project/scripts/app.pid
+project/scripts/workdir.txt
+project/scripts/launch-error.html
+project/scripts/*.bak-*
