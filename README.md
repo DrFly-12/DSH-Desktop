@@ -18,10 +18,14 @@ DeepSeek Harness（官方 `@deepseek-ai/dsh`）的 **Windows 桌面化一键安�
 - 环境自检：自动探测管理员权限、系统版本、桌面路径、Node/pnpm/Chrome/git 是否就绪。
 - 缺啥装啥：Node.js 走国内 npmmirror 镜像下载；管理员用官方 MSI，无管理员自动降级为便携版；Chrome 用官方 per-user 安装器（免管理员）。
 - 隐藏启动：PowerShell 与 pnpm 均以隐藏窗口运行，全程无黑框。
-- 首次打开即已登录：DSH `0.1.5-rc.x` 起 Web 界面走 cookie 认证（裸请求返回 `401`）。启动器会等它启动时打印的一次性 `?token=` 地址（约 4-6 秒），再用该地址打开 Chrome —— 只有浏览器**自发导航**才带得住那个 `SameSite=Strict` cookie，界面第一次就登录成功。
-- 慢启动兜底：若 20 秒内等不到 token（例如正在升级依赖），改开加载页（loading.html）显示进度；该路径下 cookie 同样会存下，按一次刷新即可进入。
+- 秒开加载反馈：双击图标约 2 秒内即弹出加载窗口，状态栏实时显示「正在启动服务 (Ns)」等进度文案，不会误以为应用没点开。
+- 首次打开即已登录：DSH `0.1.5-rc.x` 起 Web 界面走 cookie 认证（裸请求返回 `401`）。启动器等到它打印的一次性 `?token=` 地址后，关掉加载窗口、改用带 token 的地址打开 Chrome —— 只有浏览器**自发导航**才带得住那个 `SameSite=Strict` cookie，界面第一次就登录成功。
+- 慢启动兜底：若长时间等不到 token（例如正在升级依赖），加载窗口继续显示已等待秒数，服务就绪后自动跳转；该路径下 cookie 同样会存下，按一次刷新即可进入。
+- 数据与程序分离：程序文件在安装目录，个人数据（profiles / 会话 / 凭据）固定在 `%USERPROFILE%\.dsh`，重装、升级、卸载都不丢数据。
+- 完全卸载工具：开始菜单内置「完全卸载」可执行程序，一键彻底清除程序文件、快捷方式、注册表项与运行期残留（默认保留个人数据，确认后才会删除）。
 - 进程级清理：关闭 Chrome 窗口即自动停掉对应的 DSH 服务，不误杀其它 Node 进程。
-- 防重复启动：PID 锁 + 端口检测，避免开多个实例。
+- 防重复启动：PID 锁 + 端口检测（进程活着但 3080 端口未监听 → 判定僵尸启动器并回收），避免开多个实例。
+- 版本受控升级：依赖只走 `package.json` 里的 semver 范围（绝不锁死 `@<精确版本>`），`dsh-version.ps1` 支持 status / list / pin / rollback，坏版本可一键回退 lastKnownGood。
 - 日志轮转：启动日志自动截断（500 行 / 1MB），不会无限膨胀。
 - 自动确认升级：隐藏桌面启动会自动确认 pnpm 的 DSH 安装提示。
 - 启动保护：升级或启动阶段 30 秒无输出、或 120 秒未就绪会停止并显示错误页面。
@@ -52,6 +56,10 @@ irm https://github.com/DrFly-12/DSH-Desktop/raw/main/dsh.ps1 | iex
 它等价于官方 CLI 的短命令风格：远程引导脚本只负责下载临时安装包，正式的 `setup.ps1` 仍会询问安装路径和工作区路径。安装完成后无需再手动执行 `pnpm dlx`，直接关闭安装窗口即可看到 DSH 启动窗口。
 
 > 安全提示：执行前可先在浏览器打开 [dsh.ps1](https://github.com/DrFly-12/DSH-Desktop/raw/main/dsh.ps1) 检查脚本内容；公司安全策略禁止 `irm | iex` 时，请使用下方的 ZIP 下载方式。
+
+### 图形化安装包（EXE，可选）
+
+仓库 `project/installer/` 提供图形安装向导（Inno Setup 源码 `dsh-setup.iss`，本地编译产出 `DeepSeekHarness-Setup-1.2.0.exe`）：简体中文界面、许可证 + 环境检测（Node / pnpm / Chrome 实时状态）+ 分步进度条，完成后可勾选「立即启动」。安装目录默认 `%LOCALAPPDATA%\Programs\DeepSeek Harness`，个人数据仍固定在 `%USERPROFILE%\.dsh`；开始菜单附「完全卸载」工具。
 
 ### 1. 获取本仓库
 
@@ -132,15 +140,17 @@ function dshweb {
 
 ```
 桌面快捷方式 "DeepSeek Harness.lnk"
-  → DeepSeek Harness.vbs（Windows 原生执行）
+  → DeepSeek Harness.vbs（Windows 原生执行；EXE 安装版为 wscript + launch-dsh.vbs）
     → powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass
       → launcher.ps1
-        → 预检 Node / pnpm / Chrome，并清理 PID 已死的僵尸锁
+        → 预检 Node / pnpm / Chrome，并清理 PID 已死的僵尸锁与僵尸启动器
+        → 立即打开 loading.html 加载窗口（约 2 秒，反馈先行，显示已等待秒数）
         → 若 DSH 已在运行：直接用当前会话的 token 地址打开 Chrome（瞬时，已登录）
-        → 若未运行：后台启动 pnpm dlx @deepseek-ai/dsh --profile web --patch desktop.patch.yml
+        → 若未运行：后台启动 pnpm dlx @deepseek-ai/dsh@"<semver 范围>" --profile web --patch desktop.patch.yml
              → 等它打印 "?token=..."（最多 20 秒）
-                 等到 token → 用带 token 的地址打开 Chrome（打开即已登录）
-                 没等到     → 打开 loading.html 显示进度，就绪后跳转（必要时刷新一次）
+                 等到 token → 关掉加载窗口，用带 token 的地址打开 Chrome（打开即已登录）
+                 没等到     → 加载窗口继续显示进度，服务就绪后跳转（必要时刷新一次）
+        → 版本检查挪到服务就绪之后执行（非阻塞），只刷新下次启动的版本号显示
         → Chrome 关闭时，仅清理本次桌面启动的 DSH 服务
 ```
 
@@ -154,11 +164,15 @@ DSH-Desktop/
 ├── .gitignore
 └── project/                  # 要落到目标电脑的骨架
     ├── scripts/
-    │   ├── launcher.ps1      # 启动器（pnpm dlx + Chrome 加载页 + 进程清理）
+    │   ├── launcher.ps1      # 启动器（秒开加载窗口 + 换窗登录 + 进程清理）
+    │   ├── modules/          # 启动器拆分的 5 个单一职责模块（logger / lock-manager / process-utils / dsh-runtime / chrome-launcher）
+    │   ├── dsh-version.ps1   # 版本管理（status / list / pin / rollback / set-fallback）
+    │   ├── dsh-version.json  # 版本跟踪（installedVersion / lastKnownGood）
     │   ├── install.ps1       # 单独刷新 / 重建桌面快捷方式
     │   ├── DeepSeek Harness.vbs
     │   ├── loading.html
     │   └── dsh.ico
+    ├── installer/            # 图形安装向导（dsh-setup.iss + 完全卸载工具 CleanUninstall.cs 源码）
     └── profiles/web/
         └── cordis.patch.yml  # printUrl: true（其余 profile 文件由 dsh 首次运行自动生成）
 ```
@@ -168,10 +182,19 @@ DSH-Desktop/
 
 ## 卸载
 
+### EXE 安装版
+
+- **开始菜单 → DeepSeek Harness → 完全卸载**：运行 CleanUninstall 工具，交互确认后彻底清除程序文件、快捷方式、注册表项与运行期残留；默认**保留**个人数据，明确确认后才删除；
+- 或 **Windows 设置 → 应用** 里标准卸载（同时清除 `DSH_HOME` 用户环境变量）。
+
+### 脚本版
+
 1. 删除桌面快捷方式 `DeepSeek Harness.lnk`；
 2. 删除项目目录（默认 `%USERPROFILE%\.dsh`）；
 3. 若安装时设置过环境变量 `DSH_HOME`，在「系统属性 → 环境变量」里删除它；
 4. （可选）卸载 Node.js / Chrome。
+
+> 个人数据（profiles / 会话 / 凭据）位于 `%USERPROFILE%\.dsh`，卸载默认保留；需要彻底清除时使用「完全卸载」工具并确认删除。
 
 ## 常见问题（FAQ）
 
