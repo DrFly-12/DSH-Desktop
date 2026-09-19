@@ -57,9 +57,11 @@ irm https://github.com/DrFly-12/DSH-Desktop/raw/main/dsh.ps1 | iex
 
 > 安全提示：执行前可先在浏览器打开 [dsh.ps1](https://github.com/DrFly-12/DSH-Desktop/raw/main/dsh.ps1) 检查脚本内容；公司安全策略禁止 `irm | iex` 时，请使用下方的 ZIP 下载方式。
 
-### 图形化安装包（EXE，可选）
+### 图形化安装包（EXE，推荐）
 
-仓库 `project/installer/` 提供图形安装向导（Inno Setup 源码 `dsh-setup.iss`，本地编译产出 `DeepSeekHarness-Setup-1.2.0.exe`）：简体中文界面、许可证 + 环境检测（Node / pnpm / Chrome 实时状态）+ 分步进度条，完成后可勾选「立即启动」。安装目录默认 `%LOCALAPPDATA%\Programs\DeepSeek Harness`，个人数据仍固定在 `%USERPROFILE%\.dsh`；开始菜单附「完全卸载」工具。
+仓库根目录直接提供编译好的 [`DeepSeekHarness-Setup-1.2.0.exe`](https://github.com/DrFly-12/DSH-Desktop/raw/main/DeepSeekHarness-Setup-1.2.0.exe)（2 MB，免编译，双击即用）：简体中文界面、许可证 + 环境检测（Node / pnpm / Chrome 实时状态）+ 分步进度条，完成后可勾选「立即启动」。安装目录默认 `%LOCALAPPDATA%\Programs\DeepSeek Harness`，个人数据仍固定在 `%USERPROFILE%\.dsh`；开始菜单附「完全卸载」工具。
+
+也可从 `project/installer/dsh-setup.iss`（Inno Setup 源码）自行编译。
 
 ### 1. 获取本仓库
 
@@ -160,6 +162,7 @@ function dshweb {
 DSH-Desktop/
 ├── setup.ps1                 # 主安装脚本（7 阶段交互式）
 ├── dsh.ps1                   # 远程一条命令引导脚本
+├── DeepSeekHarness-Setup-1.2.0.exe  # 图形化安装包（免编译，双击即用）
 ├── README.md
 ├── .gitignore
 └── project/                  # 要落到目标电脑的骨架
