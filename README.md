@@ -59,9 +59,11 @@ irm https://github.com/DrFly-12/DSH-Desktop/raw/main/dsh.ps1 | iex
 
 ### 图形化安装包（EXE，推荐）
 
-仓库根目录直接提供编译好的 [`DeepSeekHarness-Setup-1.2.0.exe`](https://github.com/DrFly-12/DSH-Desktop/raw/main/DeepSeekHarness-Setup-1.2.0.exe)（2 MB，免编译，双击即用）：简体中文界面、许可证 + 环境检测（Node / pnpm / Chrome 实时状态）+ 分步进度条，完成后可勾选「立即启动」。安装目录默认 `%LOCALAPPDATA%\Programs\DeepSeek Harness`，个人数据仍固定在 `%USERPROFILE%\.dsh`；开始菜单附「完全卸载」工具。
+到 **[Releases 页面](https://github.com/DrFly-12/DSH-Desktop/releases/latest)** 下载 `DeepSeekHarness-Setup-1.2.1.exe`（约 2 MB，免编译，双击即用）：简体中文界面、许可证 + 环境检测（Node / pnpm / Chrome 实时状态）+ 分步进度条。安装目录默认 `%LOCALAPPDATA%\Programs\DeepSeek Harness`，个人数据仍固定在 `%USERPROFILE%\.dsh`；开始菜单附「完全卸载」工具。
 
-也可从 `project/installer/dsh-setup.iss`（Inno Setup 源码）自行编译。
+> 安装包放在 Releases 而非仓库根目录：二进制附件不占仓库文件树，克隆体积更小，下载链接也不会随根目录文件增删而失效。
+
+也可从 `project/scripts/installer/dsh-setup.iss`（Inno Setup 源码）自行编译。
 
 ### 1. 获取本仓库
 
@@ -162,9 +164,9 @@ function dshweb {
 DSH-Desktop/
 ├── setup.ps1                 # 主安装脚本（7 阶段交互式）
 ├── dsh.ps1                   # 远程一条命令引导脚本
-├── DeepSeekHarness-Setup-1.2.0.exe  # 图形化安装包（免编译，双击即用）
 ├── README.md
-├── .gitignore
+├── LICENSE                   # MIT
+├── .gitignore                # 挡住凭据 / 会话 / 个人配置，勿删
 └── project/                  # 要落到目标电脑的骨架
     ├── scripts/
     │   ├── launcher.ps1      # 启动器（秒开加载窗口 + 换窗登录 + 进程清理）
@@ -179,6 +181,9 @@ DSH-Desktop/
     └── profiles/web/
         └── cordis.patch.yml  # printUrl: true（其余 profile 文件由 dsh 首次运行自动生成）
 ```
+
+> 图形安装包（`DeepSeekHarness-Setup-*.exe`）不在仓库里，发布在
+> [Releases](https://github.com/DrFly-12/DSH-Desktop/releases) 页面 —— 二进制附件独立存储，不占仓库文件树。
 
 > 注意：`profiles/node_modules`、`sessions/`、`storages/` 均为机器相关数据（node_modules 是指向
 > pnpm 缓存的软链接），**不要**复制到新电脑，dsh 首次运行会自动重建。
