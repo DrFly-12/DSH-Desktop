@@ -48,7 +48,9 @@ foreach ($m in $moduleFiles) {
 $workDirCfg = "$dshHome\scripts\workdir.txt"
 $workDir = $env:USERPROFILE
 if (Test-Path $workDirCfg) {
-    $txt = (Get-Content $workDirCfg -ErrorAction SilentlyContinue | Select-Object -First 1).Trim()
+    # Explicit UTF8: plain Get-Content falls back to the ANSI code page on
+    # Windows PowerShell 5.1, which would mangle a non-ASCII profile path.
+    $txt = (Get-Content $workDirCfg -Encoding UTF8 -ErrorAction SilentlyContinue | Select-Object -First 1).Trim()
     if ($txt -and (Test-Path $txt)) { $workDir = $txt }
 }
 
@@ -90,7 +92,9 @@ function Show-LaunchError($message) {
     if ($chromeProc -and -not $chromeProc.HasExited) {
         Stop-Process -Id $chromeProc.Id -Force -ErrorAction SilentlyContinue
     }
-    $errorUrl = "file:///" + ($errorPagePath -replace '\\', '/')
+    # Escaped, not hand-built: the install path contains a space
+    # ("...\Programs\DeepSeek Harness\..."), see ConvertTo-FileUrl.
+    $errorUrl = ConvertTo-FileUrl $errorPagePath
     $chromeProc = Launch-Chrome -ChromePath $chrome -AppUrl $errorUrl
 }
 
@@ -217,7 +221,9 @@ public static extern bool SetForegroundWindow(IntPtr hWnd);
         $serverReady = $false
         $chromeProc = $null
         $cmdProc = $null
-        $loadingUrl = "file:///" + ($loadingPath -replace '\\', '/')
+        # Percent-encoded: the install path contains a space, and a raw space
+        # splits the argument so Chrome opens a truncated URL (see ConvertTo-FileUrl).
+        $loadingUrl = ConvertTo-FileUrl $loadingPath
         $userClosedWindow = $false
 
         foreach ($attempt in $attempts) {
@@ -391,11 +397,25 @@ public static extern bool SetForegroundWindow(IntPtr hWnd);
                 $dshVersion = Get-DshInstalledVersion -Workspace $workDir -TimeoutSec 20
                 if ($dshVersion -match '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
                     Log "  dsh  : v$dshVersion (range: $dshRange)"
+                    # UTF-8 read/write is MANDATORY here. loading.html is UTF-8
+                    # *without* a BOM and carries Chinese status text; plain
+                    # `Get-Content` on Windows PowerShell 5.1 falls back to the
+                    # ANSI code page (GBK here), which turned every Chinese
+                    # string into mojibake and — because '?' replaces bytes GBK
+                    # cannot map — ate the closing quote of a JS string literal,
+                    # breaking the whole <script> block. The page then rendered
+                    # but never polled or redirected. Never re-introduce a
+                    # bare Get-Content/Set-Content pair on this file.
                     if (Test-Path $loadingPath) {
-                        $loadingHtml = Get-Content $loadingPath -Raw -ErrorAction SilentlyContinue
-                        if ($loadingHtml) {
-                            $loadingHtml = $loadingHtml -replace 'v(?:__DSH_VERSION__|\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)', "v$dshVersion"
-                            Set-Content -Path $loadingPath -Value $loadingHtml -Encoding UTF8
+                        try {
+                            $loadingHtml = [System.IO.File]::ReadAllText($loadingPath, [System.Text.Encoding]::UTF8)
+                            if ($loadingHtml) {
+                                $loadingHtml = $loadingHtml -replace 'v(?:__DSH_VERSION__|\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)', "v$dshVersion"
+                                # UTF8Encoding($false) => no BOM, byte-identical style to the source file
+                                [System.IO.File]::WriteAllText($loadingPath, $loadingHtml, (New-Object System.Text.UTF8Encoding($false)))
+                            }
+                        } catch {
+                            Log "  WARNING: could not refresh version label in loading.html: $_"
                         }
                     }
                 } else {

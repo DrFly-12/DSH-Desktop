@@ -78,6 +78,49 @@ The Web GUI sits behind a browser auth cookie (introduced with DSH `0.1.5-rc.x`;
 - If no token shows up within 20 seconds of the server answering, the loading page falls back to the plain URL, which is correct for a browser that already holds the cookie.
 - `token.js` is blanked by the launcher before every open, so a token from an earlier run can never point the browser at a session that has already exited.
 
+## Splash screen (loading.html)
+
+The loading window is the only feedback a cold start has, and it had two independent failure modes
+that both present as "the splash screen does not appear". Both were fixed in **1.2.1** — do not
+undo either one.
+
+### 1. The `file://` URL must be percent-encoded
+
+A child process receives its arguments as **one command line** and re-splits it on whitespace, so a
+raw path breaks the moment it contains a space — and the default install target does exactly that:
+
+```
+--app=file:///C:/Users/<user>/AppData/Local/Programs/DeepSeek Harness/scripts/loading.html
+```
+
+Chrome received **two** arguments, opened the truncated `file:///.../Programs/DeepSeek`
+(file not found) and the splash page never loaded. The evidence is still in the browser profile:
+`chrome-profile\Default\Sessions\*` records that cut-off URL verbatim. The dev copy lives in
+`%USERPROFILE%\.dsh`, which contains no space, and that is why the fault stayed invisible until the
+packaged app was run.
+
+- `ConvertTo-FileUrl` in `modules\chrome-launcher.ps1` percent-encodes the path
+  (`ConvertTo-FileUrl "C:\a b\x.html"` → `file:///C:/a%20b/x.html`). It also handles non-ASCII
+  user names (`%E4%B8%AD%E6%96%87`) and UNC paths, and `[System.Uri]` round-trips all of them.
+- `Launch-Chrome` additionally quotes the `--app` value, so a caller that forgets to escape still
+  passes a single argument.
+- `launch-error.html` was assembled the same way and had the same defect; it now uses the helper too.
+
+### 2. Never read/write `loading.html` without an explicit encoding
+
+`loading.html` is UTF-8 **without a BOM** and carries Chinese status text. A bare `Get-Content`
+on Windows PowerShell 5.1 falls back to the **ANSI code page** (GBK here), so the version-label
+refresh read `正在启动服务...` as `姝ｅ湪鍚姩鏈嶅姟...` and wrote the mojibake back out as UTF-8.
+Worse, GBK cannot map every byte pair and substitutes `?` — which swallowed the closing quote of a
+JS string literal inside `showError(...)`, breaking the whole `<script>` block. The page then
+rendered but never polled `token.js` or redirected.
+
+The refresh now uses `[System.IO.File]::ReadAllText` / `WriteAllText` with an explicit UTF-8
+encoding and writes back without a BOM. Measured regression check on a copy of the real file:
+source 5759 bytes / 122 double-quotes → old path 5865 bytes / 120 quotes (two quotes lost),
+new path 5749 bytes / 122 quotes (only the intended `v0.1.5-rc.X` shrink). `scripts\workdir.txt` is
+read with `-Encoding UTF8` for the same reason.
+
 ## Usage
 Double-click "DeepSeek Harness" desktop icon.
 A loading window appears within ~2 seconds — no more blank-desktop guessing about whether the
@@ -177,7 +220,7 @@ powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\.dsh\scripts\install.ps1
 ## EXE Installer (Inno Setup)
 
 A graphical, fully localised Chinese installer is provided in `installer/dsh-setup.iss`
-(current version **1.2.0**).
+(current version **1.2.1**).
 
 ### Build the installer EXE
 
@@ -211,11 +254,16 @@ A graphical, fully localised Chinese installer is provided in `installer/dsh-set
   `{app}` root.
 - Creates **Start Menu** shortcuts (app / uninstall / **完全卸载**) and a **desktop** shortcut
   (**checked by default**).
-- Completion page offers **"立即启动"** (launch now, **checked by default**) — the launcher now
-  shows its loading window within ~2s, so an install-time launch gets immediate feedback.
-- Runs `post-install.ps1` to create the workspace, `profiles\web`, and a
-  `package.json` with the DSH semver range; **deletes** any machine-specific `DSH_HOME`
-  user env var (data lives in `~\.dsh`, see *Data Directory*).
+- Completion page has **no launch option** (changed in 1.2.1). The `[Run]` entry used to carry
+  `Flags: postinstall`, which Inno Setup renders as a "立即启动" checkbox on the finished page.
+  It is gone: the wizard now closes as soon as the files are written, and the app is started from
+  the desktop / Start-Menu shortcut. `[Run]` is intentionally left empty — re-adding a postinstall
+  entry would bring the checkbox back.
+- Runs its own `[Code] ConfigureWorkspace()` step (progress page) to create the workspace,
+  `profiles\web`, and a `package.json` with the DSH semver range, and writes
+  `scripts\workdir.txt`; **deletes** any machine-specific `DSH_HOME` user env var (data lives in
+  `~\.dsh`, see *Data Directory*). Note `installer\post-install.ps1` is a standalone manual helper
+  — it is **not** packaged into the EXE and the wizard does not call it.
 - Registers uninstall info in **Windows Settings > Apps**; uninstalling also clears `DSH_HOME`.
 - Warns if **Node.js** is not detected (prerequisite).
 

@@ -1,11 +1,11 @@
 ; ============================================================================
 ; DeepSeek Harness — Inno Setup 安装脚本（自定义中文界面 + 分步进度条）
 ; Build: & "<ISCC path>\ISCC.exe" dsh-setup.iss
-; Output: Output\DeepSeekHarness-Setup-1.2.0.exe
+; Output: Output\DeepSeekHarness-Setup-1.2.1.exe
 ; ============================================================================
 
 #define MyAppName "DeepSeek Harness"
-#define MyAppVersion "1.2.0"
+#define MyAppVersion "1.2.1"
 #define MyAppPublisher "DeepSeek Harness"
 #define MyAppExeName "launcher.ps1"
 #define MyAppURL "https://github.com/deepseek-ai/dsh"
@@ -98,12 +98,10 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "wscript.exe"; \
     IconFilename: "{app}\scripts\dsh.ico"; Tasks: desktopicon
 
 [Run]
-; 完成页复选框：安装后立即启动（默认勾选；启动器 2 秒内即显示加载窗口。
-; nowait 不阻塞安装程序退出；skipifsilent 使静默安装跳过此步）
-Filename: "wscript.exe"; \
-    Parameters: "//B ""{app}\scripts\launch-dsh.vbs"" ""{app}"""; \
-    Description: "立即启动 DeepSeek Harness"; \
-    Flags: postinstall nowait skipifsilent runhidden
+; 故意为空：完成页不再提供「立即启动」复选框。
+; 原 [Run] 条目带 postinstall 标志，会在完成页渲染成一个勾选项，安装结束后
+; 代为拉起应用；现已移除，安装完成后请通过桌面/开始菜单快捷方式启动。
+; 若将来需要重新加回，须同时确认 launch-dsh.vbs 的 {app} 参数拼接正确。
 
 [UninstallRun]
 ; 卸载时清除指向安装目录的 DSH_HOME 用户环境变量
