@@ -4,30 +4,39 @@
 Completely hidden launcher that starts the DSH web server, waits for the one-time token it prints a few seconds later, and then opens a Chrome app window **already authenticated**, so the GUI loads on the first try. If startup runs long — a package upgrade, say — it falls back to a loading page with progress instead of leaving the user staring at a blank desktop.
 
 ## Architecture
+Two launcher paths, one engine:
+
+- **Installed app (EXE installer)** — Start-Menu/Desktop shortcut → `wscript.exe //B launch-dsh.vbs "{app}"` (GUI subsystem, zero console flash) → hidden PowerShell → `launcher.ps1`
+- **Dev copy** — desktop shortcut points at `DeepSeek Harness.vbs` inside the project (created by `install.ps1`)
+
 ```
-Desktop shortcut "DeepSeek Harness.lnk" → points directly to DeepSeek Harness.vbs inside the project
-  → Windows executes .vbs natively (no System32 path in shortcut properties)
-    → powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass
-      → launcher.ps1
-        → Pre-flight checks (Node.js, pnpm, Chrome)
-        → If DSH already running:
-            → Opens Chrome at the live session's tokenised URL (instant, authenticated)
-        → If DSH not running (cold start):
-            → Start-Process cmd.exe -WindowStyle Hidden
-              → (echo y)|pnpm dlx @deepseek-ai/dsh --profile web --patch desktop.patch.yml (hidden console)
-            → Waits up to 20s for the "?token=..." line DSH prints while booting
-                → Token seen  → opens Chrome at that tokenised URL (already authenticated)
-                → No token yet → opens Chrome at loading.html (splash screen, polls every 1.5s)
-            → Server ready → GUI loads
-        → On Chrome close → stops DSH server (process-specific cleanup)
+launcher.ps1
+  → Pre-flight checks (Node.js, pnpm, Chrome) — fast, nothing blocking
+  → If DSH already running:
+      → Opens Chrome at the live session's tokenised URL (instant, authenticated)
+  → If DSH not running (cold start):
+      → Opens the loading.html window IMMEDIATELY (~2s after the double-click)
+      → Start-Process cmd.exe -WindowStyle Hidden
+        → (echo y)|pnpm dlx @deepseek-ai/dsh@"<semver range>" --profile web --patch desktop.patch.yml
+        → (range read from workspace package.json; never an exact @<version> pin)
+      → Waits up to 20s for the "?token=..." line DSH prints while booting
+          → Token seen  → swaps the loading window for Chrome at the tokenised URL
+                          (browser-initiated navigation keeps the Strict cookie flowing)
+          → No token yet → keeps the loading window; the page polls token.js every 1.5s
+                           and redirects itself once the token lands (one reload on 401)
+      → Version check (`pnpm dlx ... --version`, up to 20s) runs only AFTER the server
+        is ready — it must never sit between the double-click and the first window
+  → On Chrome close → stops DSH server (process-specific cleanup)
 ```
 
 ## Key Features
-- **Authenticated on the first try** — Chrome is opened at the tokenised URL, which is the only navigation the auth cookie survives (see below)
-- **Slow-boot fallback** — if the token is late, the loading page takes over with visible progress instead of a blank wait
-- **No console windows** — PowerShell and pnpm both start with hidden windows
-- **Chrome standalone window** — No browser chrome, looks like native app
-- **Loading page with status** — Shows startup progress, error message if server fails
+- **Instant startup feedback** — the loading window appears ~2 seconds after the double-click (the old flow stayed blank for 6-20s); status text is localised and shows elapsed seconds from the first tick
+- **Authenticated on the first try** — the loading window is swapped for Chrome at the tokenised URL the moment the token lands; that is the only navigation the auth cookie survives (see below)
+- **Slow-boot fallback** — if the token is late, the loading page stays up with visible progress instead of a blank wait
+- **Data-safe by design** — DSH data (profiles/sessions/credentials) always lives in `%USERPROFILE%\.dsh`, never inside the install dir; reinstall/upgrade/uninstall keeps user data
+- **No console windows** — wscript + VBS + hidden PowerShell + hidden pnpm: nothing flashes
+- **Chrome standalone window** — dedicated `--user-data-dir` so the spawned chrome.exe is the window-lifetime process (no handoff to an already-running Chrome)
+- **Clean uninstall tool** — Start-Menu「完全卸载 DeepSeek Harness」(`CleanUninstall.exe`) stops processes, removes leftovers the standard uninstaller misses, and optionally clears user data
 - **PID lock file** — Prevents duplicate instances (tracks the actual server PID via port detection)
 - **Process-specific cleanup** — Kills only the DSH node process, never other Node.js apps
 - **Auto cleanup** — Stops DSH when Chrome closes
@@ -39,6 +48,14 @@ Desktop shortcut "DeepSeek Harness.lnk" → points directly to DeepSeek Harness.
 - **Launch error page** — Shows unexpected DSH errors in the app window and records them in the launch log
 - **Zombie lock recovery** — Clears an orphaned `<file>.lock` left behind by a crashed or force-killed run before a cold start. `dsh-atomic-write` deliberately never reclaims an orphaned lock ("orphan recovery is an operator action"), so without this the next launch dies on `timed out waiting for the writer lock`
 - **Auth-aware readiness probe** — The Web GUI answers `401` to any request without its auth cookie. That is treated as "server is up and serving", not "server is absent"; only a transport failure counts as down
+
+## Data Directory
+The launcher always forces `DSH_HOME=%USERPROFILE%\.dsh` for the DSH child process, and the
+installer deletes any machine-specific `DSH_HOME` user env var it once set. Profiles, sessions
+and credentials therefore live in the persistent user directory — never inside the install dir
+(which is wiped on uninstall). The launcher resolves its own assets relative to its script
+location, so the dev copy (`~\.dsh\scripts`) and the installed copy (`{app}\scripts`) coexist
+without interfering.
 
 ## Web GUI authentication
 
@@ -63,8 +80,10 @@ The Web GUI sits behind a browser auth cookie (introduced with DSH `0.1.5-rc.x`;
 
 ## Usage
 Double-click "DeepSeek Harness" desktop icon.
-The app window appears once DSH prints its token — about 4-6s on a warm start — already signed in.
-On a slow start (a package upgrade, for instance) a loading screen shows progress and the window follows.
+A loading window appears within ~2 seconds — no more blank-desktop guessing about whether the
+double-click registered. On a warm start (~4-6s) it is swapped for the authenticated app window;
+on a slow start (a package upgrade, for instance) it stays up and shows progress until the GUI
+is ready.
 Close the window → DSH auto-terminates.
 
 ### PowerShell shortcut
@@ -92,9 +111,10 @@ function dshweb {
         Start-Process $url
         return
     }
-    $version = (& pnpm.cmd dlx @deepseek-ai/dsh --version 2>$null | Select-Object -First 1)
+    $range = (Get-Content package.json -Raw | ConvertFrom-Json).dependencies.'@deepseek-ai/dsh'
+    $version = (& pnpm.cmd dlx "@deepseek-ai/dsh@$range" --version 2>$null | Select-Object -First 1)
     if ($version) { Write-Host "DeepSeek Harness v$version" }
-    'y' | & pnpm.cmd dlx @deepseek-ai/dsh web
+    'y' | & pnpm.cmd dlx "@deepseek-ai/dsh@$range" web
 }
 '@
 ```
@@ -116,19 +136,130 @@ Edit variables at the top of `launcher.ps1`:
 - `$tokenWaitSeconds` — max seconds to wait for the startup token before falling back to the loading page (default: `20`)
 - `$maxLogBytes` / `$maxLogLines` — log rotation thresholds
 
+## Dependency Management (stability)
+
+DSH releases frequent rc builds with breaking changes. The launcher **never** uses an exact version pin like `@deepseek-ai/dsh@0.1.5-rc.1` at runtime. Instead, it reads a **semver range** from the workspace `package.json` and runs `pnpm dlx @deepseek-ai/dsh@"<range>"`, which resolves to the latest matching version (cached after first run).
+
+The workspace `package.json` declares:
+
+```json
+{
+  "dependencies": {
+    "@deepseek-ai/dsh": ">=0.1.5-rc.1 <0.1.5-rc.2"
+  },
+  "packageManager": "pnpm@9.0.0",
+  "engines": { "node": ">=18", "pnpm": ">=8" }
+}
+```
+
+- **`>=0.1.5-rc.1 <0.1.5-rc.2`** — a semver range (not an exact `@<version>` pin). Currently caps below rc.2 because `0.1.5-rc.2` has a broken `@deepseek-ai/dsh-type-meta` dependency that 404s on the npm registry. Widen to `<0.1.6` once a fixed rc is released.
+- **`pnpm dlx` with range** — the launcher runs `pnpm dlx @deepseek-ai/dsh@">=0.1.5-rc.1 <0.1.5-rc.2"`, resolving to the latest version in range. The package is cached after first download.
+- **`dsh-version.json`** tracks the resolved version + `lastKnownGood` fallback for reporting; it does not pin.
+- **Updates** are controlled by editing the range in `package.json` (e.g. widening to `<0.1.6`).
+
+Manage versions with `dsh-version.ps1`:
+
+```powershell
+dsh-version.ps1 status              # show resolved (pnpm dlx) + fallback versions
+dsh-version.ps1 list                # list all available DSH versions
+dsh-version.ps1 pin 0.1.5-rc.3      # update package.json range + pnpm add (updates lockfile)
+dsh-version.ps1 rollback            # reinstall lastKnownGood via pnpm add
+dsh-version.ps1 set-fallback 0.1.5-rc.1  # set the fallback version
+```
+
+`pin` runs `pnpm add @deepseek-ai/dsh@<version>` and promotes the previous version to `lastKnownGood`, giving you a one-click rollback via `rollback`.
+
 ## Install / Refresh Shortcut
 ```powershell
 powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\.dsh\scripts\install.ps1"
 ```
 
+## EXE Installer (Inno Setup)
+
+A graphical, fully localised Chinese installer is provided in `installer/dsh-setup.iss`
+(current version **1.2.0**).
+
+### Build the installer EXE
+
+1. Install Inno Setup 6:
+   ```powershell
+   winget install --id JRSoftware.InnoSetup --exact
+   ```
+2. Generate the wizard brand images and compile the clean-uninstall tool (one-time):
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\gen-images.ps1
+   csc /nologo /target:winexe /out:CleanUninstall.exe /r:System.dll /r:System.Core.dll `
+       /r:System.Management.dll /r:System.Windows.Forms.dll `
+       /win32icon:..\dsh.ico /codepage:65001 CleanUninstall.cs
+   ```
+   (`csc` ships with .NET Framework 4 at `C:\Windows\Microsoft.NET\Framework64\v4.0.30319\`)
+3. Compile (ISCC location differs for per-user vs machine-wide installs):
+   ```powershell
+   $iscc = @(
+     "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe",
+     "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+   ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+   & $iscc "c:\Users\gavan\.dsh\scripts\installer\dsh-setup.iss"
+   ```
+4. The output EXE is written to `installer\Output\DeepSeekHarness-Setup-<version>.exe`.
+
+### What the installer does
+
+- **Fully localised Chinese wizard** — welcome / license / directory / environment-detection
+  (Node.js, pnpm, Chrome with re-check button) / step-by-step progress / completion pages.
+- Installs all scripts + `modules\` to the chosen directory; the clean-uninstall tool goes to
+  `{app}` root.
+- Creates **Start Menu** shortcuts (app / uninstall / **完全卸载**) and a **desktop** shortcut
+  (**checked by default**).
+- Completion page offers **"立即启动"** (launch now, **checked by default**) — the launcher now
+  shows its loading window within ~2s, so an install-time launch gets immediate feedback.
+- Runs `post-install.ps1` to create the workspace, `profiles\web`, and a
+  `package.json` with the DSH semver range; **deletes** any machine-specific `DSH_HOME`
+  user env var (data lives in `~\.dsh`, see *Data Directory*).
+- Registers uninstall info in **Windows Settings > Apps**; uninstalling also clears `DSH_HOME`.
+- Warns if **Node.js** is not detected (prerequisite).
+
+### Clean uninstall tool (CleanUninstall.exe)
+
+Start-Menu shortcut「完全卸载 DeepSeek Harness」or `{app}\CleanUninstall.exe` directly:
+
+1. Stops all DSH-related processes (WMI command-line match + port 3080 listener probe).
+2. Runs the official `unins000.exe` uninstaller (silent), then kills it if it hangs (>120s).
+3. Removes runtime leftovers the standard uninstaller does not track (logs, `chrome-profile`),
+   plus the desktop / Start-Menu shortcuts and the uninstall registry key as a safety net.
+4. Deletes the `DSH_HOME` user env var (with `WM_SETTINGCHANGE` broadcast).
+5. **User data** (`~\.dsh`, the configured workspace) is kept by default; a three-way confirm
+   dialog offers full removal — skipped automatically if the folder contains a `.git`
+   directory (development repository guard).
+
+Silent/automation flags: `/silent` (no dialogs, keep user data), `/silent /full` (also remove
+user data), `/dir <path>` (target override), `/test` (file operations only — no process kills,
+no registry/env/shortcut changes; used for CI-style testing).
+
+### Prerequisites (not bundled)
+
+- **Node.js** >= 18 — https://nodejs.org
+- **pnpm** >= 8 — `corepack enable && corepack prepare pnpm@latest --activate`
+
 ## Files
 | File | Purpose |
 |------|---------|
-| `launcher.ps1` | Main launcher — orchestrates pnpm dlx, Chrome, cleanup |
+| `launcher.ps1` | Main launcher — orchestrates `pnpm dlx @deepseek-ai/dsh@"<range>"`, early loading window, Chrome, cleanup |
+| `modules/` | Modular components: logger, lock-manager, process-utils, dsh-runtime, chrome-launcher |
 | `desktop.patch.yml` | Desktop-only profile override that disables DSH's default-browser handoff |
-| `loading.html` | Splash page shown while server starts; auto-redirects when ready |
+| `loading.html` | Splash page shown while server starts; auto-redirects when ready (localised status + elapsed seconds) |
 | `token.js` | Session-token handoff from the launcher to the loading page; blanked on every launch |
-| `install.ps1` | Creates/refreshes the desktop shortcut |
+| `install.ps1` | Creates/refreshes the dev desktop shortcut (points at `DeepSeek Harness.vbs`) |
+| `dsh-version.json` | Tracks installed DSH version + lastKnownGood fallback (no launch-time pinning) |
+| `dsh-version.ps1` | Version manager: status / list / pin (via pnpm add) / rollback / set-fallback |
+| `installer/dsh-setup.iss` | Inno Setup script for the graphical EXE installer (localised Chinese wizard) |
+| `installer/launch-dsh.vbs` | wscript shim for the installed app — GUI subsystem, no console flash |
+| `installer/post-install.ps1` | Post-install configuration (workspace, profiles, env var) |
+| `installer/CleanUninstall.cs` | Source of the clean-uninstall tool (build with `csc`, see installer section) |
+| `installer/CleanUninstall.exe` | Compiled clean-uninstall tool packaged into the installer |
+| `installer/ChineseSimplified.isl` | Localised Inno Setup language file |
+| `installer/gen-images.ps1` | Regenerates the wizard brand images (wizard-large/small.bmp) |
+| `installer/LICENSE.txt` | License shown in the installer wizard |
 | `dsh.ico` | App icon for the desktop shortcut |
 | `app.pid` | Runtime lock file (prevents duplicate launches) |
 | `dsh-launch.log` | Diagnostic log (auto-rotated) |
@@ -137,6 +268,12 @@ powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\.dsh\scripts\install.ps1
 | `launch-error.html` | Error page shown when desktop startup fails |
 
 ## Uninstall
-1. Delete the desktop shortcut `DeepSeek Harness.lnk`
-2. Delete `%USERPROFILE%\.dsh\scripts\` folder
-3. (Optional) Restore `%USERPROFILE%\.dsh\profiles\web\cordis.patch.yml` if customised
+1. **Standard**: Windows Settings → Apps → DeepSeek Harness → Uninstall (removes installed
+   files, shortcuts, the uninstall registry key and the `DSH_HOME` user env var).
+2. **Deep clean**: Start-Menu →「完全卸载 DeepSeek Harness」(`CleanUninstall.exe`) — also stops
+   running processes and removes runtime leftovers (logs, `chrome-profile`) the standard
+   uninstaller does not track. Offers optional user-data removal.
+3. User data in `%USERPROFILE%\.dsh` (profiles, sessions, credentials) is kept unless the
+   full-removal option was chosen explicitly.
+
+---

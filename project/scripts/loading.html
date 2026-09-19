@@ -1,9 +1,9 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en" data-page-node-id="I19y4HIPAJEscixcXtBx7z">
 <head data-page-node-id="hHF3swE76z5U3cDmwwcDt8">
 <meta charset="UTF-8" data-page-node-id="MOxmLxnV2MKpjHumI7F6Fg">
 <meta name="viewport" content="width=device-width, initial-scale=1.0" data-page-node-id="Ce4JJIF8wXwuhbJhuozCsZ">
-<title>DeepSeek Harness v0.1.5-rc.1</title>
+<title>DeepSeek Harness v0.1.5-rc.2</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
@@ -43,8 +43,8 @@
   <div class="logo" data-page-node-id="ELh1rALDxV1lg41wUA7gHi">
     <svg viewBox="0 0 24 24" data-page-node-id="w8z2bAmlbFtFm3IlTSKzj2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" data-page-node-id="BcLIdb0xF5ZWse0owFniUz"/></svg>
   </div>
-  <h1 data-page-node-id="PakFn5mYRzCDSKtb4Pwd6c">DeepSeek Harness <span id="version" data-page-node-id="sh9RHtvOeYkTYjhLH5eV0S">v0.1.5-rc.1</span></h1>
-  <p class="status" id="status" data-page-node-id="DBPTZr1Fkvo8h8DWjd51Zg">Starting server...</p>
+  <h1 data-page-node-id="PakFn5mYRzCDSKtb4Pwd6c">DeepSeek Harness <span id="version" data-page-node-id="sh9RHtvOeYkTYjhLH5eV0S">v0.1.5-rc.2</span></h1>
+  <p class="status" id="status" data-page-node-id="DBPTZr1Fkvo8h8DWjd51Zg">正在启动服务...</p>
   <div class="spinner" id="spinner" data-page-node-id="w1sFjVmYzLw0Jo1LmDSIaP"></div>
   <p class="error" id="error" data-page-node-id="9QvTvRr6p0cm8GjS9hfRyP"></p>
   <p class="retry-hint" id="retry-hint" data-page-node-id="KpIAQt2zTxGUMTKIJdaHLd"></p>
@@ -91,9 +91,10 @@
 
   function tick() {
     attempts++;
+    var elapsed = Math.round(attempts * POLL_MS / 1000);
     loadToken(function (tok) {
       if (tok) {
-        status("Signing in...");
+        status("正在登录...");
         window.location.href = TARGET + "/?token=" + encodeURIComponent(tok);
         return;
       }
@@ -101,11 +102,11 @@
       fetch(TARGET, { mode: "no-cors", cache: "no-store" }).then(function () {
         if (!serverUpAt) {
           serverUpAt = Date.now();
-          status("Server ready - waiting for credentials...");
+          status("服务已就绪，正在获取登录凭据...");
         } else if (Date.now() - serverUpAt > TOKEN_GRACE_MS) {
           // No token arrived. A browser that already holds the auth cookie can
           // still open the plain URL, so try it rather than stalling forever.
-          status("Server ready - redirecting...");
+          status("服务已就绪，正在进入应用...");
           window.location.href = TARGET;
           return;
         }
@@ -113,17 +114,19 @@
       }).catch(function () {
         if (attempts >= MAX_ATTEMPTS) {
           showError(
-            "Server did not start within 2 minutes.",
-            "Please check the terminal or re-launch the application."
+            "服务在 2 分钟内未能启动。",
+            "请查看日志或重新启动应用。"
           );
           return;
         }
-        if (attempts <= 3) {
-          status("Starting server...");
-        } else if (attempts <= 10) {
-          status("Still loading dependencies...");
+        // Elapsed seconds are shown from the very first tick so the user can
+        // always tell the app is starting (perceived-progress requirement).
+        if (attempts <= 10) {
+          status("正在启动服务... (" + elapsed + "s)");
+        } else if (attempts <= 20) {
+          status("正在加载依赖... (" + elapsed + "s)");
         } else {
-          status("Almost ready... (" + Math.round(attempts * POLL_MS / 1000) + "s)");
+          status("即将就绪... (" + elapsed + "s)");
         }
         setTimeout(tick, POLL_MS);
       });
@@ -134,6 +137,7 @@
 </script>
 </body>
 </html>
+
 
 
 

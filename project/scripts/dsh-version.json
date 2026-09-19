@@ -1,0 +1,26 @@
+{
+  "installedVersion": "",
+  "lastKnownGood": "0.1.5-rc.1",
+  "autoUpdate": false,
+  "updateChannel": "rc",
+  "history": [
+    {
+      "version": "0.1.5-rc.1",
+      "date": "2026-09-19",
+      "status": "current",
+      "note": "Installed via pnpm (>=0.1.5-rc.1 <0.1.5-rc.2 range, lockfile-managed)"
+    },
+    {
+      "version": "0.1.5-rc.1",
+      "date": "2026-09-12",
+      "status": "fallback",
+      "note": "Last known good version"
+    },
+    {
+      "version": "0.1.1-rc.2",
+      "date": "2026-08-23",
+      "status": "archived",
+      "note": "Previous working version"
+    }
+  ]
+}
